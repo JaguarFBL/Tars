@@ -592,18 +592,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._emit({"s": buf.strip()})
         except RuntimeError as e:
             rollback(gen, prev)
-            self._emit({"error": str(e), "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
+            try:
+                self._emit({"error": str(e), "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
+            except ConnectionError:
+                pass  # Client déjà déconnecté
             return
         except Exception as e:
             rollback(gen, prev)
-            self._emit({"error": f"Erreur interne : {e}", "s": "Erreur critique, commandant."})
+            try:
+                self._emit({"error": f"Erreur interne : {e}", "s": "Erreur critique, commandant."})
+            except ConnectionError:
+                pass  # Client déjà déconnecté
             return
 
         if not finish_turn(gen, reply):
             return  # un tour plus récent a pris la main
 
         set_status("off")
-        self._emit({"done": True, "settings": settings})
+        try:
+            self._emit({"done": True, "settings": settings})
+        except ConnectionError:
+            pass  # Client déjà déconnecté
         # Écriture mémoire APRÈS la réponse, hors du chemin critique
         threading.Thread(
             target=lambda: (journal_add("user", text), journal_add("tars", reply.strip())),
@@ -611,8 +620,14 @@ class Handler(BaseHTTPRequestHandler):
         ).start()
 
     def _emit(self, obj):
-        self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
-        self.wfile.flush()
+        """Émet un événement SSE. Gère les déconnexions client."""
+        try:
+            data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+            self.wfile.write(data)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # Client déconnecté, on arrête proprement
+            raise ConnectionError("Client déconnecté") from None
 
 
 # ---------- Consolidation nocturne ----------
