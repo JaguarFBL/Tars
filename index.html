@@ -223,7 +223,7 @@ function pickAck(text) {
 
 function pickVoice() {
   const vs = speechSynthesis.getVoices();
-  voice = vs.find(v => /^fr[-_]FR/i.test(v.lang)) || vs.find(v => /^fr/i.test(v.lang)) || null;
+  voice = vs.find(v => /^fr.*Male/i.test(v.name)) || vs.find(v => /Google fr-FR Standard A/i.test(v.name)) || vs.find(v => /Microsoft.*French.*Male/i.test(v.name)) || vs.find(v => /^fr[-_]FR/i.test(v.lang)) || vs.find(v => /^fr/i.test(v.lang)) || null;
 }
 if ("speechSynthesis" in window) { 
   pickVoice(); 
@@ -256,7 +256,7 @@ function fallbackTTS(text) {
   const g = gen, u = new SpeechSynthesisUtterance(text);
   u.lang = "fr-FR"; 
   if (voice) u.voice = voice;
-  u.pitch = 0.7; u.rate = 1.08;          // voix un peu plate : l'effet robot
+  u.pitch = 0.5; u.rate = 0.85;          // voix grave et lente : effet TARS robotique
   const done = () => { 
     if (g !== gen) return; 
     pending = Math.max(0, pending - 1); 
