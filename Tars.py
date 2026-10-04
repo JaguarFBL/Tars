@@ -302,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
             # Servir les fichiers statiques (clips audio, etc.)
             file_path = ROOT / path[1:]
             if file_path.exists():
-                self._send(200, file_path.read_bytes(), self.guess_type(path))
+                self._send(200, file_path.read_bytes(), "application/octet-stream")
             else:
                 self._send(404, '{"error":"fichier introuvable"}')
         else:
