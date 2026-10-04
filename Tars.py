@@ -5,10 +5,26 @@ Lancer :   python3 Tars.py
 Ouvrir :   http://localhost:8000   (localhost = contexte sécurisé, le micro marche)
 Nuit :     python3 Tars.py consolidate     (journal -> faits propres)
 Test :     TARS_MOCK=1 python3 Tars.py     (faux LLM, aucune clé nécessaire)
+
+Variables d'environnement :
+  TARS_TOKEN       : Token pour l'API (header X-Tars-Token)
+  TARS_HOST        : Hôte (127.0.0.1 par défaut)
+  TARS_PORT        : Port (8000 par défaut)
+  TARS_DATA        : Dossier des données (./data par défaut)
+  ANTHROPIC_API_KEY: Clé API Anthropic
+  MISTRAL_API_KEY : Clé API Mistral
+  TARS_MODEL       : Modèle Anthropic (claude-haiku-4-5-20251001)
+  MISTRAL_MODEL    : Modèle Mistral (mistral-tiny)
+  TARS_PROVIDERS   : Ordre des fournisseurs (mistral,anthropic)
+  TARS_MOCK        : Mode mock (1 = activé)
 """
+
+import hmac
 import json
+import mimetypes
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -16,49 +32,101 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import unquote, urlparse
 
+# ---------- Configuration ----------
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("TARS_DATA", ROOT / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
+STATIC = (ROOT / "static").resolve()
 JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "settings.json"
 MARK = DATA / "consolidated_until.txt"
 
+# Clés API
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
-MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")  # rapide : la latence prime
+MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")
 MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-tiny")
-TOKEN = os.environ.get("TARS_TOKEN", "")  # optionnel, même en local pour la compatibilité
+PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "mistral,anthropic").split(",") if p.strip()]
+
+# Sécurité
+TOKEN = os.environ.get("TARS_TOKEN", "")
 HOST = os.environ.get("TARS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TARS_PORT", "8000"))
 MOCK = os.environ.get("TARS_MOCK") == "1"
 
-# État global pour le widget
-CURRENT_STATE = {"status": "off", "last_activity": 0}
+# Limites
+MAX_BODY = 16 * 1024
+MAX_TEXT = 4000
+STATE_TTL = 120
+DOWN_FOR = 300
+CONSOLIDATE_CHUNK = 12000
+
+# ---------- État partagé ----------
+STATUSES = ("off", "listening", "thinking", "speaking")
+CURRENT_STATE = {"status": "off", "last_activity": 0.0}
 STATE_LOCK = threading.Lock()
 
+# Verrous
 LOCK = threading.Lock()
-HISTORY = []  # messages de la session en cours (RAM)
+FILE_LOCK = threading.Lock()
+HIST_LOCK = threading.Lock()
 
-# ---------- réglages persistants ----------
+# Données
+HISTORY = []
+TURN_GEN = 0
+_FACT_EVENTS = []
+
+
+def set_status(st, from_client=False):
+    with STATE_LOCK:
+        CURRENT_STATE["status"] = st
+        CURRENT_STATE["last_activity"] = time.time()
+
+
+def widget_state():
+    with STATE_LOCK:
+        s = dict(CURRENT_STATE)
+    if s["status"] != "off" and time.time() - s["last_activity"] > STATE_TTL:
+        s["status"] = "off"
+    s["settings"] = load_settings()
+    return s
+
+
+def _atomic_write(path, text):
+    with FILE_LOCK:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text, "utf-8")
+        os.replace(tmp, path)
+
+
+# ---------- Réglages persistants ----------
 
 def load_settings():
     try:
         s = json.loads(SETTINGS.read_text("utf-8"))
+        if not isinstance(s, dict):
+            s = {}
     except (OSError, ValueError):
         s = {}
-    return {"humour": int(s.get("humour", 60)), "honnetete": int(s.get("honnetete", 90))}
+    
+    def pct(key, default):
+        try:
+            return max(0, min(100, int(s.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+    
+    return {"humour": pct("humour", 60), "honnetete": pct("honnetete", 90)}
 
 
 def save_settings(s):
-    SETTINGS.write_text(json.dumps(s), "utf-8")
+    _atomic_write(SETTINGS, json.dumps(s))
 
 
-_SET_RE = re.compile(r"(humour|honn[e\u00ea]tet[e\u00e9])\s*(?:\u00e0|a|:|=|de|sur|\u00e0)?\s*(\d{1,3})", re.I)
+_SET_RE = re.compile(r"(humour|honn[e\u00ea]tet[e\u00e9])\s*(?:\u00e0|a|:|=|de|sur)?\s*(\d{1,3})", re.I)
 
 
 def parse_settings(text):
-    """'TARS, humour à 60 %' -> {'humour': 60}. Valeurs bornées à 0-100."""
     out = {}
     for name, val in _SET_RE.findall(text):
         key = "humour" if name.lower().startswith("humour") else "honnetete"
@@ -74,44 +142,111 @@ def parse_fact(text):
     return m.group(1).strip() if m else None
 
 
-# ---------- mémoire : journal append-only ----------
+# ---------- Mémoire : journal append-only ----------
 
 def journal_add(kind, text):
-    line = json.dumps({"t": time.time(), "kind": kind, "text": text}, ensure_ascii=False)
-    with LOCK, JOURNAL.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    now = time.time()
+    line = json.dumps({"t": now, "kind": kind, "text": text}, ensure_ascii=False)
+    with LOCK:
+        with JOURNAL.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        if kind == "fact":
+            _FACT_EVENTS.append((now, text))
 
 
 def journal_read():
     if not JOURNAL.exists():
         return []
     out = []
-    for line in JOURNAL.read_text("utf-8").splitlines():
+    for line in JOURNAL.read_text("utf-8", errors="replace").splitlines():
         try:
-            out.append(json.loads(line))
+            e = json.loads(line)
         except ValueError:
-            continue  # ligne corrompue : on la saute, on ne casse rien
+            continue
+        if isinstance(e, dict) and isinstance(e.get("t"), (int, float)) \
+                and isinstance(e.get("kind"), str) and isinstance(e.get("text"), str):
+            out.append(e)
     return out
 
 
+def load_fact_events():
+    with LOCK:
+        _FACT_EVENTS[:] = [(e["t"], e["text"]) for e in journal_read() if e["kind"] == "fact"]
+
+
+def read_mark():
+    try:
+        return float(MARK.read_text().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
 def context_pack():
-    """Chargé UNE fois par requête depuis le disque local : aucun aller-retour réseau."""
-    facts = FACTS.read_text("utf-8").strip() if FACTS.exists() else ""
-    ev = journal_read()
-    since = float(MARK.read_text()) if MARK.exists() else 0.0
-    fresh = [e["text"] for e in ev if e["kind"] == "fact" and e["t"] > since][-30:]
+    try:
+        facts = FACTS.read_text("utf-8").strip()
+    except OSError:
+        facts = ""
+    since = read_mark()
+    with LOCK:
+        fresh = [t for (ts, t) in _FACT_EVENTS if ts > since][-30:]
     return facts, fresh
+
+
+# ---------- Historique de session (thread-safe) ----------
+
+def normalize(msgs):
+    out = []
+    for m in msgs:
+        c = (m.get("content") or "").strip()
+        if not c:
+            continue
+        if out and out[-1]["role"] == m["role"]:
+            out[-1] = {"role": m["role"], "content": out[-1]["content"] + "\n" + c}
+        else:
+            out.append({"role": m["role"], "content": c})
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return out
 
 
 def restore_history(n=6):
     ev = [e for e in journal_read() if e["kind"] in ("user", "tars")][-n * 2:]
-    while ev and ev[0]["kind"] != "user":
-        ev.pop(0)
-    for e in ev:
-        HISTORY.append({"role": "user" if e["kind"] == "user" else "assistant", "content": e["text"]})
+    msgs = [{"role": "user" if e["kind"] == "user" else "assistant", "content": e["text"]} for e in ev]
+    with HIST_LOCK:
+        HISTORY[:] = normalize(msgs)
 
 
-# ---------- personnage ----------
+def begin_turn(text):
+    global TURN_GEN
+    with HIST_LOCK:
+        TURN_GEN += 1
+        prev = list(HISTORY)
+        HISTORY[:] = normalize(HISTORY + [{"role": "user", "content": text}])[-20:]
+        while HISTORY and HISTORY[0]["role"] != "user":
+            HISTORY.pop(0)
+        return TURN_GEN, prev, list(HISTORY)
+
+
+def is_current(gen):
+    return gen == TURN_GEN
+
+
+def finish_turn(gen, reply):
+    with HIST_LOCK:
+        if gen != TURN_GEN:
+            return False
+        if reply:
+            HISTORY.append({"role": "assistant", "content": reply})
+        return True
+
+
+def rollback(gen, prev):
+    with HIST_LOCK:
+        if gen == TURN_GEN:
+            HISTORY[:] = prev
+
+
+# ---------- Personnage ----------
 
 def _level(v, low, mid, high):
     return low if v < 40 else mid if v < 80 else high
@@ -126,11 +261,11 @@ def system_prompt(settings, changes):
         "pas d'astérisque, pas d'emoji, pas de didascalie. Ta réponse sera lue par une synthèse vocale.",
         "Ton : sec, pince-sans-rire. L'humour arrive sur un silence, un contretemps ou une mauvaise nouvelle, "
         "jamais à chaque phrase. Utilise des tics de langage occasionnels pour renforcer le personnage : "
-        "\"euh\", \"hum\", \"bon\", \"voilà\", \"enfin\", \"quand même\", \"tu vois\", \"si tu veux mon avis\", etc. "
+        '"euh", "hum", "bon", "voilà", "enfin", "quand même", "tu vois", "si tu veux mon avis", etc. '
         "Ne les utilise pas à chaque phrase, mais glisse-en de temps en temps pour un effet naturel.",
         f"Réglage humour : {h} %. " + _level(h, "Presque aucune blague, ton factuel.",
-                                          "Une pointe d'ironie de temps en temps.",
-                                          "Ironie fréquente, tu aimes taquiner le commandant."),
+                                             "Une pointe d'ironie de temps en temps.",
+                                             "Ironie fréquente, tu aimes taquiner le commandant."),
         f"Réglage honnêteté : {o} %. " + _level(
             o, "Tu choisis avec tact ce que tu mets en avant, mais tu n'affirmes jamais rien de faux.",
             "Tu es franc, en gardant un minimum de forme.",
@@ -157,7 +292,6 @@ def mock_llm(messages):
 
 
 def _stream_anthropic(system, messages, max_tokens=400):
-    """Streaming avec Anthropic (nécessite API_KEY)"""
     if not API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY manquante")
     body = json.dumps({"model": MODEL, "max_tokens": max_tokens, "system": system,
@@ -171,24 +305,31 @@ def _stream_anthropic(system, messages, max_tokens=400):
                 line = raw.decode("utf-8", "replace").strip()
                 if not line.startswith("data:"):
                     continue
-                ev = json.loads(line[5:])
-                if ev.get("type") == "content_block_delta" and ev["delta"].get("type") == "text_delta":
-                    yield ev["delta"]["text"]
-                elif ev.get("type") == "error":
-                    raise RuntimeError(ev.get("error", {}).get("message", "erreur API"))
+                try:
+                    ev = json.loads(line[5:])
+                except ValueError:
+                    continue
+                kind = ev.get("type")
+                if kind == "content_block_delta" and (ev.get("delta") or {}).get("type") == "text_delta":
+                    txt = ev["delta"].get("text", "")
+                    if txt:
+                        yield txt
+                elif kind == "error":
+                    raise RuntimeError((ev.get("error") or {}).get("message", "erreur API"))
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"API {e.code}: {e.read().decode('utf-8', 'replace')[:200]}") from None
+        raise RuntimeError(f"Anthropic {e.code}: {e.read().decode('utf-8', 'replace')[:200]}") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise RuntimeError(f"Anthropic: {e}") from None
 
 
 def _stream_mistral(system, messages, max_tokens=400):
-    """Streaming avec Mistral (nécessite MISTRAL_API_KEY)"""
     if not MISTRAL_API_KEY:
         raise RuntimeError("MISTRAL_API_KEY manquante")
     body = json.dumps({
         "model": MISTRAL_MODEL,
         "messages": [{"role": "system", "content": system}] + messages,
         "max_tokens": max_tokens,
-        "stream": True
+        "stream": True,
     }).encode()
     req = urllib.request.Request(
         "https://api.mistral.ai/v1/chat/completions", data=body, method="POST",
@@ -197,49 +338,67 @@ def _stream_mistral(system, messages, max_tokens=400):
         with urllib.request.urlopen(req, timeout=30) as r:
             for raw in r:
                 line = raw.decode("utf-8", "replace").strip()
-                if not line or line == "data: [DONE]":
+                if not line.startswith("data:"):
                     continue
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                ev = json.loads(line)
-                if ev.get("choices") and ev["choices"][0].get("delta").get("content"):
-                    yield ev["choices"][0]["delta"]["content"]
-    except Exception as e:
-        raise RuntimeError(f"Mistral API error: {e}") from None
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    ev = json.loads(payload)
+                except ValueError:
+                    continue
+                choices = ev.get("choices") or []
+                delta = (choices[0].get("delta") or {}) if choices else {}
+                content = delta.get("content")
+                if isinstance(content, list):
+                    content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+                if content:
+                    yield content
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Mistral {e.code}: {e.read().decode('utf-8', 'replace')[:200]}") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise RuntimeError(f"Mistral: {e}") from None
 
 
-def stream_llm(system, messages, max_tokens=400):
-    """Streaming LLM avec fallback : Mistral -> Anthropic -> Mock"""
+_STREAMS = {"mistral": _stream_mistral, "anthropic": _stream_anthropic}
+_DOWN = {}
+
+
+def _has_key(name):
+    return bool(MISTRAL_API_KEY) if name == "mistral" else bool(API_KEY) if name == "anthropic" else False
+
+
+def stream_llm(system, messages, max_tokens=400, providers=None):
     if MOCK:
         yield from mock_llm(messages)
         return
-    
-    # Essayer Mistral d'abord (priorité)
-    if MISTRAL_API_KEY:
+    names = [p for p in (providers or PROVIDERS) if p in _STREAMS and _has_key(p)]
+    if not names:
+        raise RuntimeError("Aucune clé API configurée (MISTRAL_API_KEY / ANTHROPIC_API_KEY).")
+    now = time.time()
+    names.sort(key=lambda n: _DOWN.get(n, 0) > now)
+    errors = []
+    for name in names:
+        started = False
         try:
-            yield from _stream_mistral(system, messages, max_tokens)
+            for chunk in _STREAMS[name](system, messages, max_tokens):
+                started = True
+                yield chunk
+            _DOWN.pop(name, None)
             return
-        except Exception as e:
-            print(f"[FALLBACK] Mistral échoué: {e}")
-    
-    # Essayer Anthropic
-    if API_KEY:
-        try:
-            yield from _stream_anthropic(system, messages, max_tokens)
-            return
-        except Exception as e:
-            print(f"[FALLBACK] Anthropic échoué: {e}")
-    
-    # Fallback final : mock
-    print("[FALLBACK] Passage en mode mock")
-    yield from mock_llm(messages)
+        except RuntimeError as e:
+            if started:
+                raise
+            _DOWN[name] = time.time() + DOWN_FOR
+            print(f"[LLM] {name} indisponible : {e}", file=sys.stderr)
+            errors.append(f"{name}: {e}")
+    raise RuntimeError("Tous les fournisseurs ont échoué. " + " | ".join(errors))
 
 
 _END = re.compile(r"(?<=[.!?\u2026])\s+")
 
 
 def pop_sentences(buf, first):
-    """Découpe le flux en phrases. La 1re peut partir plus tôt (virgule) pour gagner du temps."""
     out = []
     while True:
         m = _END.search(buf)
@@ -267,7 +426,8 @@ def pop_sentences(buf, first):
 # ---------- HTTP ----------
 
 class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.0"  # flux fermé par le serveur : le streaming reste trivial
+    protocol_version = "HTTP/1.0"
+    server_version = "TARS"
 
     def log_message(self, *a):
         pass
@@ -275,94 +435,119 @@ class Handler(BaseHTTPRequestHandler):
     def _auth(self):
         if not TOKEN:
             return True
-        q = parse_qs(urlparse(self.path).query)
-        return self.headers.get("X-Tars-Token") == TOKEN or q.get("t", [""])[0] == TOKEN
+        got = self.headers.get("X-Tars-Token", "")
+        return hmac.compare_digest(got.encode("utf-8"), TOKEN.encode("utf-8"))
 
     def _send(self, code, body, ctype="application/json; charset=utf-8"):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(data)
+
+    def _err(self, code, msg):
+        self._send(code, json.dumps({"error": msg}, ensure_ascii=False))
+
+    def _read_json(self):
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            n = -1
+        if n <= 0:
+            self._err(400, "corps JSON attendu")
+            return None
+        if n > MAX_BODY:
+            self._err(413, "corps trop gros")
+            return None
+        try:
+            data = json.loads(self.rfile.read(n))
+        except ValueError:
+            self._err(400, "JSON invalide")
+            return None
+        if not isinstance(data, dict):
+            self._err(400, "objet JSON attendu")
+            return None
+        return data
+
+    def _serve_static(self, url_path):
+        """Sert UNIQUEMENT des fichiers sous static/ (pas de path traversal)."""
+        rel = unquote(url_path[len("/static/"):])
+        # Résolution du chemin et vérification qu'il reste sous STATIC
+        try:
+            target = (STATIC / rel).resolve()
+        except (OSError, ValueError):
+            return self._err(404, "introuvable")
+        # Vérifier que target est bien dans STATIC
+        if STATIC not in target.parents or not target.is_file():
+            return self._err(404, "introuvable")
+        # Bloquer les fichiers cachés (ex: .env)
+        if any(part.startswith(".") for part in target.relative_to(STATIC).parts):
+            return self._err(404, "introuvable")
+        ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        self._send(200, target.read_bytes(), ctype)
 
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/":
-            self._send(200, (ROOT / "index.html").read_bytes(), "text/html; charset=utf-8")
+            try:
+                body = (ROOT / "index.html").read_bytes()
+            except OSError:
+                return self._err(404, "index.html introuvable")
+            self._send(200, body, "text/html; charset=utf-8")
         elif path == "/state":
             if not self._auth():
-                return self._send(401, '{"error":"token"}')
+                return self._err(401, "token")
             self._send(200, json.dumps(load_settings()))
         elif path == "/widget":
-            # Endpoint pour les widgets (Android/Windows)
-            with STATE_LOCK:
-                state = CURRENT_STATE.copy()
-                state["settings"] = load_settings()
-            self._send(200, json.dumps(state))
+            self._send(200, json.dumps(widget_state()))
         elif path.startswith("/static/"):
-            # Servir les fichiers statiques (clips audio, etc.)
-            file_path = ROOT / path[1:]
-            if file_path.exists():
-                self._send(200, file_path.read_bytes(), "application/octet-stream")
-            else:
-                self._send(404, '{"error":"fichier introuvable"}')
+            self._serve_static(path)
         else:
-            self._send(404, '{"error":"introuvable"}')
+            self._err(404, "introuvable")
 
     def do_POST(self):
-        if urlparse(self.path).path != "/chat":
-            return self._send(404, '{"error":"introuvable"}')
+        path = urlparse(self.path).path
+        if path not in ("/chat", "/status"):
+            return self._err(404, "introuvable")
         if not self._auth():
-            return self._send(401, '{"error":"token"}')
-        try:
-            n = int(self.headers.get("Content-Length", 0))
-            text = json.loads(self.rfile.read(n))["text"].strip()
-        except (ValueError, KeyError, AttributeError):
-            return self._send(400, '{"error":"JSON attendu : {"text": ...}"}')
+            return self._err(401, "token")
+        data = self._read_json()
+        if data is None:
+            return
+
+        if path == "/status":
+            st = data.get("status")
+            if st not in STATUSES:
+                return self._err(400, "état invalide")
+            set_status(st, from_client=True)
+            self._send(200, json.dumps({"status": "ok"}))
+            return
+
+        # Gestion de /chat
+        text = (data.get("text") or "").strip()
         if not text:
-            return self._send(400, '{"error":"texte vide"}')
+            return self._err(400, "texte vide")
+        if len(text) > MAX_TEXT:
+            text = text[:MAX_TEXT]
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        try:
-            # Mettre à jour l'état global
-            with STATE_LOCK:
-                CURRENT_STATE["status"] = "thinking"
-                CURRENT_STATE["last_activity"] = time.time()
-            
-            self.run_turn(text)
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # le client a coupé (barge-in) : normal
-        finally:
-            with STATE_LOCK:
-                if CURRENT_STATE["status"] == "thinking":
-                    CURRENT_STATE["status"] = "off"
-
-    def run_turn(self, text):
-        settings = load_settings()
-        changes = parse_settings(text)
-        if changes:
-            settings.update(changes)
-            save_settings(settings)
-        fact = parse_fact(text)
-        if fact:
-            journal_add("fact", fact)
-        HISTORY.append({"role": "user", "content": text})
-        del HISTORY[:-20]
-        if HISTORY[0]["role"] != "user":
-            HISTORY.pop(0)
+        set_status("thinking")
+        gen, prev, messages = begin_turn(text)
 
         reply, buf, first = "", "", True
         try:
-            # Mettre à jour l'état
-            with STATE_LOCK:
-                CURRENT_STATE["status"] = "speaking"
-                CURRENT_STATE["last_activity"] = time.time()
-            
-            for chunk in stream_llm(system_prompt(settings, changes), list(HISTORY)):
+            settings = load_settings()
+            changes = parse_settings(text)
+            if changes:
+                settings.update(changes)
+                save_settings(settings)
+            fact = parse_fact(text)
+            if fact:
+                journal_add("fact", fact)
+
+            for chunk in stream_llm(system_prompt(settings, changes), messages):
                 reply += chunk
                 buf += chunk
                 sents, buf, first = pop_sentences(buf, first)
@@ -371,50 +556,82 @@ class Handler(BaseHTTPRequestHandler):
             if buf.strip():
                 self._emit({"s": buf.strip()})
         except RuntimeError as e:
+            rollback(gen, prev)
             self._emit({"error": str(e), "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
-            HISTORY.pop()
             return
-        finally:
-            with STATE_LOCK:
-                CURRENT_STATE["status"] = "off"
-        
-        HISTORY.append({"role": "assistant", "content": reply.strip()})
+        except Exception as e:
+            rollback(gen, prev)
+            self._emit({"error": f"Erreur interne : {e}", "s": "Erreur critique, commandant."})
+            return
+
+        if not finish_turn(gen, reply):
+            return  # un tour plus récent a pris la main
+
+        set_status("off")
         self._emit({"done": True, "settings": settings})
-        # écriture mémoire APRÈS la réponse, hors du chemin critique
-        threading.Thread(target=lambda: (journal_add("user", text), journal_add("tars", reply.strip())),
-                         daemon=True).start()
+        # Écriture mémoire APRÈS la réponse, hors du chemin critique
+        threading.Thread(
+            target=lambda: (journal_add("user", text), journal_add("tars", reply.strip())),
+            daemon=True
+        ).start()
 
     def _emit(self, obj):
         self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
         self.wfile.flush()
 
 
-# ---------- consolidation nocturne ----------
+# ---------- Consolidation nocturne ----------
 
 def consolidate():
-    since = float(MARK.read_text()) if MARK.exists() else 0.0
-    ev = [e for e in journal_read() if e["t"] > since]
+    since = read_mark()
+    ev = [e for e in journal_read() if e["t"] > since and e["kind"] == "fact"]
     if not ev:
         print("Rien de nouveau dans le journal.")
         return
-    old = FACTS.read_text("utf-8") if FACTS.exists() else "(vide)"
-    log = "\n".join(f"[{e['kind']}] {e['text']}" for e in ev)[-12000:]
-    prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
-              "Réécris la liste complète : un fait court par ligne commençant par '- ', uniquement des faits "
-              "durables et explicitement dits par le commandant, sans doublon, sans rien inventer. "
-              "Les lignes [fact] sont à retenir en priorité. Réponds uniquement par la liste.\n\n"
-              f"FAITS ACTUELS:\n{old}\n\nJOURNAL:\n{log}")
+    try:
+        old = FACTS.read_text("utf-8")
+    except OSError:
+        old = ""
     
-    # Utiliser le mock LLM pour la consolidation si pas d'API
-    if MOCK or not API_KEY:
-        print("Mode mock pour la consolidation.")
-        out = "\n".join(f"- {e['text']}" for e in ev if e["kind"] == "fact")
+    # Préparer le log des nouveaux faits
+    log = "\n".join(f"[{e['kind']}] {e['text']}" for e in ev)
+    
+    # Si on a Mistral ou Anthropic, utiliser l'API pour consolider
+    if MISTRAL_API_KEY:
+        try:
+            prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
+                     "Réécris la liste complète : un fait court par ligne commençant par '- ', uniquement des faits "
+                     "durables et explicitement dits par le commandant, sans doublon, sans rien inventer. "
+                     "Les lignes [fact] sont à retenir en priorité. Réponds uniquement par la liste.\n\n"
+                     f"FAITS ACTUELS:\n{old}\n\nJOURNAL:\n{log}")
+            out = "".join(_stream_mistral("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
+        except Exception as e:
+            print(f"[CONSOLIDATE] Mistral échoué: {e}. Passage en mode manuel.")
+            out = old + "\n" + "\n".join(f"- {e['text']}" for e in ev)
+    elif API_KEY:
+        try:
+            prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
+                     "Réécris la liste complète : un fait court par ligne commençant par '- ', uniquement des faits "
+                     "durables et explicitement dits par le commandant, sans doublon, sans rien inventer. "
+                     "Les lignes [fact] sont à retenir en priorité. Réponds uniquement par la liste.\n\n"
+                     f"FAITS ACTUELS:\n{old}\n\nJOURNAL:\n{log}")
+            out = "".join(_stream_anthropic("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
+        except Exception as e:
+            print(f"[CONSOLIDATE] Anthropic échoué: {e}. Passage en mode manuel.")
+            out = old + "\n" + "\n".join(f"- {e['text']}" for e in ev)
     else:
-        out = "".join(_stream_anthropic("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], 1500)).strip()
+        # Mode manuel : ajouter les nouveaux faits à l'ancien
+        out = old + "\n" + "\n".join(f"- {e['text']}" for e in ev)
     
     if not out.startswith("-"):
-        sys.exit("Réponse inattendue du modèle, facts.md non modifié.")
-    FACTS.write_text(out + "\n", "utf-8")
+        print("Réponse inattendue du modèle, facts.md non modifié.")
+        return
+    
+    # Sauvegarde de sécurité
+    if FACTS.exists():
+        shutil.copy2(FACTS, FACTS_BAK)
+    
+    _atomic_write(FACTS, out + "\n")
     MARK.write_text(str(max(e["t"] for e in ev)))
     print(f"{len(ev)} événements consolidés -> {FACTS}")
 
@@ -423,16 +640,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         consolidate()
         sys.exit(0)
-    if not MOCK and not MISTRAL_API_KEY and not API_KEY:
-        print("[INFO] Pas de MISTRAL_API_KEY ou ANTHROPIC_API_KEY. Utilisation du mode mock (LLM local simulé).")
-    if HOST != "127.0.0.1" and not TOKEN:
-        sys.exit("TARS_HOST ouvert au réseau : définis TARS_TOKEN.")
     
-    # Initialiser l'état global
-    with STATE_LOCK:
-        CURRENT_STATE = {"status": "off", "last_activity": time.time()}
+    if not MOCK and not any([MISTRAL_API_KEY, API_KEY]):
+        print("Définis MISTRAL_API_KEY ou ANTHROPIC_API_KEY (ou TARS_MOCK=1 pour tester sans clé).")
+        sys.exit(1)
+    
+    if HOST != "127.0.0.1" and not TOKEN:
+        print("TARS_HOST ouvert au réseau : définis TARS_TOKEN.")
+        sys.exit(1)
     
     restore_history()
-    print(f"TARS en ligne -> http://{'localhost' if HOST == '127.0.0.1' else HOST}:{PORT}"
-          f"  (modèle {'MOCK' if MOCK else MODEL})")
+    print(f"TARS en ligne -> http://{'localhost' if HOST == '127.0.0.1' else HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
