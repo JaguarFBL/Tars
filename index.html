@@ -3,23 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#101315">
+<meta name="theme-color" content="#0a0a0a">
 <title>TARS pas tars</title>
 <style>
   :root {
-    --bg: #101315; --slab: #2b3136; --seam: #0a0c0d; --lit: #d8e6ec;
-    --dim: #3a4247; --text: #c9d3d8; --mute: #7d8990; --warn: #d08a4e;
+    --bg: #0a0a0a;
+    --slab: #1a1a1a;
+    --seam: #000;
+    --lit: #0f0;
+    --dim: #2a2a2a;
+    --text: #e0e0e0;
+    --mute: #666;
+    --warn: #ff5500;
+    --primary: #00ff88;
     box-sizing: border-box;
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-  *, *::before, *::after { box-sizing: inherit; }
-  html, body { margin: 0; background: var(--bg); color: var(--text); }
-  body {
-    min-height: 100dvh; display: flex; flex-direction: column; align-items: center;
-    font: 16px/1.5 "Avenir Next", "Segoe UI", Roboto, system-ui, sans-serif;
   }
   
+  *, *::before, *::after { 
+    box-sizing: inherit; 
+    margin: 0; 
+    padding: 0;
+  }
+  
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 'Courier New', 'SF Mono', monospace;
+  }
+  
+  body {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px;
+    background-image: 
+      radial-gradient(circle at 1px 1px, rgba(0, 255, 0, 0.1) 1px, transparent 0);
+    background-size: 20px 20px;
+  }
+
   /* Mode Widget */
   body.widget-mode {
     width: 200px;
@@ -27,6 +51,7 @@
     background: var(--slab);
     border-radius: 8px;
     padding: 8px;
+    border: 1px solid var(--dim);
   }
   body.widget-mode main {
     max-width: 100%;
@@ -44,6 +69,7 @@
   body.widget-mode #slab i {
     height: 8px;
   }
+  body.widget-mode #history,
   body.widget-mode #you,
   body.widget-mode #tars,
   body.widget-mode .gauges,
@@ -52,65 +78,384 @@
     display: none;
   }
   
-  main { width: 100%; max-width: 420px; flex: 1; display: flex; flex-direction: column; padding: 20px 20px 16px; gap: 20px; }
-  #status { margin: 0; color: var(--mute); min-height: 1.5em; }
-  #status.err { color: var(--warn); }
+  /* Mode embarqué (Electron/Capacitor) */
+  body.embedded {
+    padding: 0;
+  }
+  body.embedded main {
+    padding: 10px;
+  }
 
+  /* Conteneur principal */
+  main {
+    width: 100%;
+    max-width: 500px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 20px 10px;
+    gap: 15px;
+  }
+
+  /* Statut */
+  #status {
+    margin: 0;
+    color: var(--primary);
+    min-height: 1.5em;
+    text-align: center;
+    font-size: 15px;
+    text-shadow: 0 0 5px var(--primary);
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+  }
+  #status.err {
+    color: var(--warn);
+    text-shadow: 0 0 5px var(--warn);
+  }
+
+  /* Historique des conversations */
+  #history {
+    flex: 1;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--dim);
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 14px;
+    line-height: 1.6;
+    max-height: 300px;
+    min-height: 100px;
+  }
+  #history p {
+    margin: 5px 0;
+    padding: 4px 8px;
+    border-radius: 3px;
+  }
+  #history p strong {
+    color: var(--primary);
+  }
+  #history .user {
+    background: rgba(0, 255, 0, 0.1);
+    border-left: 3px solid var(--primary);
+  }
+  #history .tars {
+    background: rgba(0, 0, 0, 0.2);
+    border-left: 3px solid var(--dim);
+  }
+
+  /* Monolithe (bouton TARS) */
   #slab {
-    align-self: center; width: 104px; height: min(46dvh, 300px); padding: 0; border: 0; background: none;
-    display: flex; flex-direction: column; gap: 6px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    align-self: center;
+    width: 120px;
+    height: 120px;
+    padding: 0;
+    border: 0;
+    background: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    position: relative;
   }
-  #slab:focus-visible { outline: 2px solid var(--lit); outline-offset: 6px; }
+  
+  #slab::before {
+    content: '';
+    position: absolute;
+    inset: -15px;
+    border: 2px solid var(--primary);
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  
+  #slab:hover::before {
+    opacity: 0.3;
+  }
+  
+  #slab:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 4px;
+  }
+  
   #slab i {
-    flex: 1; position: relative; background: var(--slab); border-radius: 3px;
-    box-shadow: inset 0 1px 0 #3b4247, inset 0 -2px 0 var(--seam);
-    transition: transform .35s ease;
+    flex: 1;
+    position: relative;
+    background: var(--slab);
+    border-radius: 4px;
+    box-shadow: inset 0 1px 0 var(--dim), inset 0 -2px 0 var(--seam);
+    transition: transform 0.35s ease, background 0.3s;
   }
+  
   #slab i::after {
-    content: ""; position: absolute; left: 18%; right: 18%; top: 50%; height: 3px; margin-top: -1.5px;
-    background: var(--dim); border-radius: 2px; transition: background .3s, box-shadow .3s;
+    content: "";
+    position: absolute;
+    left: 18%;
+    right: 18%;
+    top: 50%;
+    height: 2px;
+    margin-top: -1px;
+    background: var(--dim);
+    border-radius: 1px;
+    transition: background 0.3s, box-shadow 0.3s, transform 0.3s;
   }
-  body[data-state="listening"] #slab i::after { background: var(--lit); animation: breathe 2.4s ease-in-out infinite; }
-  body[data-state="speaking"] #slab i::after { background: var(--lit); box-shadow: 0 0 10px var(--lit); animation: talk .7s ease-in-out infinite; }
+  
+  body[data-state="listening"] #slab i::after {
+    background: var(--primary);
+    animation: breathe 2.4s ease-in-out infinite;
+  }
+  
+  body[data-state="speaking"] #slab i::after {
+    background: var(--primary);
+    box-shadow: 0 0 15px var(--primary);
+    animation: talk 0.7s ease-in-out infinite;
+  }
+  
   body[data-state="speaking"] #slab i:nth-child(2)::after { animation-delay: .15s; }
   body[data-state="speaking"] #slab i:nth-child(3)::after { animation-delay: .3s; }
   body[data-state="speaking"] #slab i:nth-child(4)::after { animation-delay: .45s; }
-  body[data-state="thinking"] #slab i:nth-child(odd) { animation: shift 1.1s ease-in-out infinite; }
-  body[data-state="thinking"] #slab i:nth-child(even) { animation: shift 1.1s ease-in-out infinite reverse; }
-  body[data-state="thinking"] #slab i::after { background: var(--mute); }
-  @keyframes breathe { 50% { opacity: .35; } }
-  @keyframes talk { 50% { opacity: .4; box-shadow: 0 0 2px var(--lit); } }
-  @keyframes shift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(12px); } }
-  @media (prefers-reduced-motion: reduce) { #slab i, #slab i::after { animation: none !important; } }
-
-  .talk p { margin: 0 0 10px; max-width: 60ch; }
-  .talk small { display: block; color: var(--mute); font-size: 13px; }
-  #you { color: var(--mute); }
-
-  .gauges { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; margin-top: auto; }
-  .gauges span { color: var(--mute); font-size: 14px; }
-  .bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
-  .bar b { height: 8px; background: var(--dim); border-radius: 1px; }
-  .bar b.on { background: var(--lit); }
-
-  label.opt { display: flex; gap: 10px; align-items: center; color: var(--mute); font-size: 14px; }
-  form { display: flex; gap: 8px; }
-  input[type=text] {
-    flex: 1; min-width: 0; padding: 12px; font: inherit; color: var(--text);
-    background: #181c1f; border: 1px solid #2b3136; border-radius: 4px;
-  }
-  button.send { padding: 0 16px; font: inherit; color: var(--bg); background: var(--lit); border: 0; border-radius: 4px; }
-  input:focus-visible, button.send:focus-visible, label.opt input:focus-visible { outline: 2px solid var(--lit); outline-offset: 2px; }
   
-  /* Style pour le mode embarqué (Electron/Capacitor) */
-  body.embedded { padding: 0; }
-  body.embedded main { padding: 10px; }
+  body[data-state="thinking"] #slab i:nth-child(odd) { 
+    animation: shift 1.1s ease-in-out infinite; 
+  }
+  body[data-state="thinking"] #slab i:nth-child(even) { 
+    animation: shift 1.1s ease-in-out infinite reverse; 
+  }
+  body[data-state="thinking"] #slab i::after { 
+    background: var(--mute); 
+  }
+  
+  @keyframes breathe {
+    50% { opacity: .35; }
+  }
+  @keyframes talk {
+    50% { opacity: .4; box-shadow: 0 0 5px var(--primary); }
+  }
+  @keyframes shift {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(12px); }
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
+    70% { box-shadow: 0 0 0 15px rgba(0, 255, 0, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+  }
+  
+  body[data-state="speaking"] #slab {
+    animation: pulse 1s infinite;
+  }
+  
+  @media (prefers-reduced-motion: reduce) {
+    #slab i, #slab i::after { animation: none !important; }
+  }
+
+  /* Zone de discussion */
+  .talk {
+    width: 100%;
+    min-height: 100px;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--dim);
+    border-radius: 6px;
+  }
+  
+  .talk p {
+    margin: 8px 0;
+    max-width: 100%;
+    word-wrap: break-word;
+  }
+  
+  #you {
+    color: var(--mute);
+    font-style: italic;
+  }
+  
+  #tars {
+    color: var(--text);
+    font-weight: 500;
+  }
+  
+  .talk small {
+    display: block;
+    color: var(--mute);
+    font-size: 12px;
+    margin-top: 8px;
+  }
+
+  /* Jauges de réglage */
+  .gauges {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 14px;
+    align-items: center;
+    width: 100%;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--dim);
+    border-radius: 6px;
+  }
+  
+  .gauges span {
+    color: var(--mute);
+    font-size: 14px;
+  }
+  
+  .bar {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 3px;
+  }
+  
+  .bar b {
+    height: 6px;
+    background: var(--dim);
+    border-radius: 2px;
+    transition: background 0.3s;
+  }
+  
+  .bar b.on {
+    background: var(--primary);
+    box-shadow: 0 0 5px var(--primary);
+  }
+
+  /* Options */
+  label.opt {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: var(--mute);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 4px;
+    transition: background 0.3s;
+  }
+  
+  label.opt:hover {
+    background: rgba(0, 255, 0, 0.1);
+  }
+  
+  label.opt input {
+    accent-color: var(--primary);
+  }
+
+  /* Formulaire */
+  form {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+  }
+  
+  input[type=text] {
+    flex: 1;
+    min-width: 0;
+    padding: 12px 15px;
+    font: inherit;
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--dim);
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  
+  input[type=text]:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(0, 255, 0, 0.2);
+  }
+  
+  button.send {
+    padding: 12px 20px;
+    font: inherit;
+    color: var(--bg);
+    background: var(--primary);
+    border: 0;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.3s, transform 0.1s;
+    font-weight: bold;
+  }
+  
+  button.send:hover {
+    background: #00cc6a;
+    transform: scale(1.05);
+  }
+  
+  button.send:active {
+    transform: scale(0.95);
+  }
+  
+  input:focus-visible,
+  button.send:focus-visible,
+  label.opt input:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  /* Animation de chargement */
+  .loading {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--primary);
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: spin 1s linear infinite;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    main {
+      padding: 15px 10px;
+    }
+    #slab {
+      width: 100px;
+      height: 100px;
+    }
+    .gauges {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+  }
+
+  /* Scrollbar stylisée */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: var(--dim);
+    border-radius: 4px;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: var(--primary);
+    border-radius: 4px;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00cc6a;
+  }
 </style>
 </head>
 <body data-state="off">
 <main>
-  <p id="status" role="status" aria-live="polite">Touchez le monolithe pour commencer.</p>
-  <button id="slab" aria-label="Démarrer, interrompre ou arrêter TARS"><i></i><i></i><i></i><i></i></button>
+  <p id="status" role="status" aria-live="polite">Appuyez sur le monolithe pour commencer, commandant.</p>
+  
+  <div id="history"></div>
+  
+  <button id="slab" aria-label="Démarrer, interrompre ou arrêter TARS">
+    <i></i><i></i><i></i><i></i>
+  </button>
 
   <div class="talk" aria-live="polite">
     <p id="you"></p>
@@ -121,9 +466,14 @@
     <span>Humour</span><div class="bar" id="g-humour"></div>
     <span>Honnêteté</span><div class="bar" id="g-honnetete"></div>
   </div>
-  <label class="opt"><input type="checkbox" id="casque"> Casque branché : parler par-dessus TARS l'interrompt</label>
+  
+  <label class="opt">
+    <input type="checkbox" id="casque"> 
+    <span>Casque branché : parler par-dessus TARS l'interrompt</span>
+  </label>
+  
   <form id="form" autocomplete="off">
-    <input type="text" id="txt" placeholder="Ou écrivez ici" aria-label="Message écrit">
+    <input type="text" id="txt" placeholder="Ou écrivez ici..." aria-label="Message écrit">
     <button class="send" type="submit">Envoyer</button>
   </form>
 </main>
@@ -131,8 +481,8 @@
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
-const BACKEND_URL = "http://localhost:8000";  // Toujours local
-const TOKEN = "";  // Pas besoin de token en local
+const BACKEND_URL = "http://localhost:8000";
+const TOKEN = "";
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 let state = "off", session = false, rec = null, ctrl = null, wake = null;
@@ -141,7 +491,7 @@ let settings = { humour: 60, honnetete: 90 };
 let voice = null;
 let isWidget = new URLSearchParams(location.search).has("widget");
 
-// Détecter si on est en mode embarqué (Electron/Capacitor)
+// Détecter si on est en mode embarqué
 const isEmbedded = (
   typeof window.electronAPI !== 'undefined' ||
   (window.Capacitor && window.Capacitor.getPlatform() !== 'web')
@@ -155,23 +505,26 @@ if (isWidget) {
   document.body.classList.add("widget-mode");
 }
 
-/* ---------- affichage ---------- */
+/* ---------- Affichage ---------- */
 const LABELS = { 
-  off: "Hors ligne.", 
-  listening: "Je vous écoute.", 
-  thinking: "…", 
-  speaking: "" 
+  off: "Appuyez sur le monolithe, commandant.", 
+  listening: "Je vous écoute, commandant.", 
+  thinking: "Réflexion en cours...", 
+  speaking: ""
 };
+
 function setState(s) {
   state = s; 
   document.body.dataset.state = s;
   if (LABELS[s] !== undefined) note(LABELS[s]);
 }
-function note(msg, err) { 
+
+function note(msg, err) {
   const el = $("#status"); 
   el.textContent = msg; 
-  el.classList.toggle("err", !!err); 
+  el.classList.toggle("err", !!err);
 }
+
 function renderGauges() {
   for (const k of ["humour", "honnetete"]) {
     const n = Math.round(settings[k] / 10), el = $("#g-" + k);
@@ -180,15 +533,25 @@ function renderGauges() {
   }
 }
 
-/* ---------- synthèse vocale ---------- */
-// Pré-charger les clips audio pour les accusés de réception
+/* ---------- Historique ---------- */
+function addToHistory(userText, tarsText) {
+  const historyDiv = $("#history");
+  if (userText) {
+    historyDiv.innerHTML += `<p class="user"><strong>Toi:</strong> ${userText}</p>`;
+  }
+  if (tarsText) {
+    historyDiv.innerHTML += `<p class="tars"><strong>TARS:</strong> ${tarsText}</p>`;
+  }
+  historyDiv.scrollTop = historyDiv.scrollHeight;
+}
+
+/* ---------- Synthèse vocale ---------- */
 const ACK_AUDIO = {
   court: [],
   reflexion: [],
   drole: []
 };
 
-// Charger les clips audio si disponibles
 function loadAudioClips() {
   const originalClips = {
     court: ["affirmative", "systems_nominal", "yes", "roger_that"],
@@ -220,14 +583,12 @@ function loadAudioClips() {
   }
 }
 
-// Choisir un clip audio aléatoire
 function pickAck(text) {
   const long = text.length > 80 || /expliqu|pourquoi|comment|compar/i.test(text);
   let pool = long ? ACK_AUDIO.reflexion : ACK_AUDIO.court;
   if (settings.humour >= 70) pool = pool.concat(ACK_AUDIO.drole);
   if (settings.humour <= 30) pool = ACK_AUDIO.court.slice(0, 2);
   
-  // Filtrer pour éviter la répétition
   const available = pool.filter(a => a.src !== lastAck);
   if (available.length === 0) return pool[0];
   
@@ -238,32 +599,32 @@ function pickAck(text) {
 
 function pickVoice() {
   const vs = speechSynthesis.getVoices();
-  voice = vs.find(v => /^fr.*Male/i.test(v.name)) || vs.find(v => /Google fr-FR Standard A/i.test(v.name)) || vs.find(v => /Microsoft.*French.*Male/i.test(v.name)) || vs.find(v => /^fr[-_]FR/i.test(v.lang)) || vs.find(v => /^fr/i.test(v.lang)) || null;
+  voice = vs.find(v => /^fr.*Male/i.test(v.name)) || 
+          vs.find(v => /Google fr-FR Standard A/i.test(v.name)) ||
+          vs.find(v => /Microsoft.*French.*Male/i.test(v.name)) ||
+          vs.find(v => /^fr[-_]FR/i.test(v.lang)) || 
+          vs.find(v => /^fr/i.test(v.lang)) || null;
 }
+
 if ("speechSynthesis" in window) { 
   pickVoice(); 
   speechSynthesis.onvoiceschanged = pickVoice; 
 }
 
 function say(text) {
-  // Si on est en mode widget, ne pas parler (le widget ne gère que l'affichage)
   if (isWidget) return;
   
-  // Essayer de jouer un clip audio si disponible
   const clip = pickAck(text);
   if (clip && !clip.paused) {
-    // Si le clip est déjà chargé et valide
     const playPromise = clip.play();
     if (playPromise !== undefined) {
       playPromise.catch(e => {
-        console.log("Clip audio échoué, utilisation de la synthèse vocale:", e);
         fallbackTTS(text);
       });
     }
     return;
   }
   
-  // Fallback vers la synthèse vocale
   fallbackTTS(text);
 }
 
@@ -271,7 +632,7 @@ function fallbackTTS(text) {
   const g = gen, u = new SpeechSynthesisUtterance(text);
   u.lang = "fr-FR"; 
   if (voice) u.voice = voice;
-  u.pitch = 0.5; u.rate = 0.85;          // voix grave et lente : effet TARS robotique
+  u.pitch = 0.5; u.rate = 0.85;
   const done = () => { 
     if (g !== gen) return; 
     pending = Math.max(0, pending - 1); 
@@ -283,12 +644,13 @@ function fallbackTTS(text) {
   speechSynthesis.speak(u);
 }
 
-/* ---------- reconnaissance vocale ---------- */
+/* ---------- Reconnaissance vocale ---------- */
 function stopRec() { 
   const r = rec; 
   rec = null; 
   if (r) { try { r.abort(); } catch (e) {} } 
 }
+
 function wantsMic() { 
   return session && (state === "listening" || $("#casque").checked); 
 }
@@ -307,7 +669,7 @@ function listen() {
       txt += e.results[i][0].transcript; 
       if (e.results[i].isFinal) fin = true;
     }
-    if (state !== "listening" && $("#casque").checked && txt.trim().length > 2) interrupt(false); // barge-in
+    if (state !== "listening" && $("#casque").checked && txt.trim().length > 2) interrupt(false);
     if (state === "listening") $("#you").textContent = txt;
     if (fin && state === "listening") { 
       stopRec(); 
@@ -317,7 +679,7 @@ function listen() {
   me.onerror = e => {
     if (rec !== me) return;
     if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-      note("Micro refusé. Autorisez-le dans les réglages du site, puis touchez le monolithe.", true);
+      note("Micro refusé. Autorisez-le dans les réglages du site.", true);
       endSession();
     }
   };
@@ -327,7 +689,7 @@ function listen() {
   try { me.start(); } catch (e) { /* déjà démarré */ }
 }
 
-/* ---------- flux conversation ---------- */
+/* ---------- Flux conversation ---------- */
 function maybeResume() {
   if (streaming || pending > 0 || !session) return;
   setState("listening");
@@ -352,6 +714,9 @@ function onEvent(ev, g) {
       gotFirst = true; 
       clearTimeout(ackTimer); 
       setState("speaking");
+      addToHistory($("#you").textContent, ev.s);
+    } else {
+      addToHistory("", ev.s);
     }
     $("#tars").textContent += (ev.error ? "" : ($("#tars").textContent ? " " : "")) + ev.s;
     say(ev.s);
@@ -378,8 +743,6 @@ async function send(text) {
   ctrl = new AbortController();
   
   try {
-    // En mode embarqué, utiliser le backend local
-    // En mode web, essayer localhost puis fallback
     const backendUrl = isEmbedded ? BACKEND_URL : window.location.origin;
     const r = await fetch(`${backendUrl}/chat`, {
       method: "POST", 
@@ -388,7 +751,6 @@ async function send(text) {
       body: JSON.stringify({ text }),
     });
     if (!r.ok) {
-      // Fallback : utiliser Web Speech API uniquement
       throw new Error("Backend non disponible");
     }
     const rd = r.body.getReader(), dec = new TextDecoder(); 
@@ -406,10 +768,10 @@ async function send(text) {
     }
   } catch (e) {
     if (e.name !== "AbortError" && g === gen) {
-      note("Mode local : backend non disponible. Utilisation de la synthèse vocale.", true);
-      // Fallback : réponse mock
+      note("Mode local : backend non disponible.", true);
       const reply = `Je suis en mode local. Vous avez dit : "${text}".`;
       say(reply);
+      addToHistory(text, reply);
       if (g === gen) { 
         streaming = false; 
         clearTimeout(ackTimer); 
@@ -425,21 +787,19 @@ async function send(text) {
   }
 }
 
-/* ---------- session ---------- */
+/* ---------- Session ---------- */
 async function startSession() {
   if (!SR) { 
-    note("Reconnaissance vocale absente de ce navigateur : utilisez Chrome, ou le champ texte.", true); 
+    note("Reconnaissance vocale absente. Utilisez Chrome ou le champ texte.", true); 
     return; 
   }
   
-  // En mode embarqué, démarrer le backend si nécessaire
   if (isEmbedded && typeof window.electronAPI !== 'undefined') {
     try {
       await window.electronAPI.restartBackend();
-      // Attendre que le backend soit prêt
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (e) {
-      console.error("Erreur lors du démarrage du backend:", e);
+      console.error("Erreur backend:", e);
     }
   }
   
@@ -460,11 +820,20 @@ function endSession() {
   }
 }
 
+/* ---------- Raccourcis clavier ---------- */
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' && e.target === document.body) {
+    e.preventDefault();
+    $("#slab").click();
+  }
+  if (e.key === 'Escape') {
+    endSession();
+  }
+});
+
 /* ---------- Initialisation ---------- */
-// Charger les clips audio au démarrage
 loadAudioClips();
 
-// Charger les réglages initiaux
 fetch("/state", { headers: { "X-Tars-Token": TOKEN } })
   .then(r => r.ok ? r.json() : null)
   .then(s => { 
@@ -475,7 +844,7 @@ fetch("/state", { headers: { "X-Tars-Token": TOKEN } })
   })
   .catch(() => {});
 
-// Mettre à jour le widget régulièrement (si en mode widget)
+// Mettre à jour le widget régulièrement
 if (isWidget) {
   setInterval(() => {
     fetch(`${BACKEND_URL}/widget`, { headers: { "X-Tars-Token": TOKEN } })
@@ -509,13 +878,6 @@ $("#form").addEventListener("submit", e => {
 $("#casque").addEventListener("change", () => { 
   if (session && $("#casque").checked && !rec) listen(); 
 });
-
-// Pour Electron/Capacitor : gérer le redémarrage du backend
-if (typeof window.electronAPI !== 'undefined') {
-  window.electronAPI.onBackendRestarted = () => {
-    note("Backend redémarré");
-  };
-}
 
 renderGauges();
 </script>
