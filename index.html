@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101315">
+<title>TARS pas tars</title>
+<style>
+  :root {
+    --bg: #101315; --slab: #2b3136; --seam: #0a0c0d; --lit: #d8e6ec;
+    --dim: #3a4247; --text: #c9d3d8; --mute: #7d8990; --warn: #d08a4e;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    min-height: 100dvh; display: flex; flex-direction: column; align-items: center;
+    font: 16px/1.5 "Avenir Next", "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  main { width: 100%; max-width: 420px; flex: 1; display: flex; flex-direction: column; padding: 20px 20px 16px; gap: 20px; }
+  #status { margin: 0; color: var(--mute); min-height: 1.5em; }
+  #status.err { color: var(--warn); }
+
+  #slab {
+    align-self: center; width: 104px; height: min(46dvh, 300px); padding: 0; border: 0; background: none;
+    display: flex; flex-direction: column; gap: 6px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  #slab:focus-visible { outline: 2px solid var(--lit); outline-offset: 6px; }
+  #slab i {
+    flex: 1; position: relative; background: var(--slab); border-radius: 3px;
+    box-shadow: inset 0 1px 0 #3b4247, inset 0 -2px 0 var(--seam);
+    transition: transform .35s ease;
+  }
+  #slab i::after {
+    content: ""; position: absolute; left: 18%; right: 18%; top: 50%; height: 3px; margin-top: -1.5px;
+    background: var(--dim); border-radius: 2px; transition: background .3s, box-shadow .3s;
+  }
+  body[data-state="listening"] #slab i::after { background: var(--lit); animation: breathe 2.4s ease-in-out infinite; }
+  body[data-state="speaking"] #slab i::after { background: var(--lit); box-shadow: 0 0 10px var(--lit); animation: talk .7s ease-in-out infinite; }
+  body[data-state="speaking"] #slab i:nth-child(2)::after { animation-delay: .15s; }
+  body[data-state="speaking"] #slab i:nth-child(3)::after { animation-delay: .3s; }
+  body[data-state="speaking"] #slab i:nth-child(4)::after { animation-delay: .45s; }
+  body[data-state="thinking"] #slab i:nth-child(odd) { animation: shift 1.1s ease-in-out infinite; }
+  body[data-state="thinking"] #slab i:nth-child(even) { animation: shift 1.1s ease-in-out infinite reverse; }
+  body[data-state="thinking"] #slab i::after { background: var(--mute); }
+  @keyframes breathe { 50% { opacity: .35; } }
+  @keyframes talk { 50% { opacity: .4; box-shadow: 0 0 2px var(--lit); } }
+  @keyframes shift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(12px); } }
+  @media (prefers-reduced-motion: reduce) { #slab i, #slab i::after { animation: none !important; } }
+
+  .talk p { margin: 0 0 10px; max-width: 60ch; }
+  .talk small { display: block; color: var(--mute); font-size: 13px; }
+  #you { color: var(--mute); }
+
+  .gauges { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; margin-top: auto; }
+  .gauges span { color: var(--mute); font-size: 14px; }
+  .bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+  .bar b { height: 8px; background: var(--dim); border-radius: 1px; }
+  .bar b.on { background: var(--lit); }
+
+  label.opt { display: flex; gap: 10px; align-items: center; color: var(--mute); font-size: 14px; }
+  form { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; min-width: 0; padding: 12px; font: inherit; color: var(--text);
+    background: #181c1f; border: 1px solid #2b3136; border-radius: 4px;
+  }
+  button.send { padding: 0 16px; font: inherit; color: var(--bg); background: var(--lit); border: 0; border-radius: 4px; }
+  input:focus-visible, button.send:focus-visible, label.opt input:focus-visible { outline: 2px solid var(--lit); outline-offset: 2px; }
+</style>
+</head>
+<body data-state="off">
+<main>
+  <p id="status" role="status" aria-live="polite">Touchez le monolithe pour commencer.</p>
+  <button id="slab" aria-label="Démarrer, interrompre ou arrêter TARS"><i></i><i></i><i></i><i></i></button>
+
+  <div class="talk" aria-live="polite">
+    <p id="you"></p>
+    <p id="tars"></p>
+  </div>
+
+  <div class="gauges">
+    <span>Humour</span><div class="bar" id="g-humour"></div>
+    <span>Honnêteté</span><div class="bar" id="g-honnetete"></div>
+  </div>
+  <label class="opt"><input type="checkbox" id="casque"> Casque branché : parler par-dessus TARS l'interrompt</label>
+  <form id="form" autocomplete="off">
+    <input type="text" id="txt" placeholder="Ou écrivez ici" aria-label="Message écrit">
+    <button class="send" type="submit">Envoyer</button>
+  </form>
+</main>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+let state = "off", session = false, rec = null, ctrl = null, wake = null;
+let gen = 0, pending = 0, streaming = false, gotFirst = false, ackTimer = null, lastAck = "";
+let settings = { humour: 60, honnetete: 90 };
+let voice = null;
+
+/* ---------- affichage ---------- */
+const LABELS = { off: "Hors ligne.", listening: "Je vous écoute.", thinking: "…", speaking: "" };
+function setState(s) {
+  state = s; document.body.dataset.state = s;
+  if (LABELS[s] !== undefined) note(LABELS[s]);
+}
+function note(msg, err) { const el = $("#status"); el.textContent = msg; el.classList.toggle("err", !!err); }
+function renderGauges() {
+  for (const k of ["humour", "honnetete"]) {
+    const n = Math.round(settings[k] / 10), el = $("#g-" + k);
+    el.setAttribute("title", settings[k] + " %");
+    el.innerHTML = Array.from({ length: 10 }, (_, i) => `<b class="${i < n ? "on" : ""}"></b>`).join("");
+  }
+}
+
+/* ---------- synthèse vocale ---------- */
+function pickVoice() {
+  const vs = speechSynthesis.getVoices();
+  voice = vs.find(v => /^fr[-_]FR/i.test(v.lang)) || vs.find(v => /^fr/i.test(v.lang)) || null;
+}
+if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+function say(text) {
+  const g = gen, u = new SpeechSynthesisUtterance(text);
+  u.lang = "fr-FR"; if (voice) u.voice = voice;
+  u.pitch = 0.7; u.rate = 1.08;          // voix un peu plate : l'effet robot
+  const done = () => { if (g !== gen) return; pending = Math.max(0, pending - 1); maybeResume(); };
+  u.onend = done; u.onerror = done;
+  pending++; speechSynthesis.speak(u);
+}
+
+/* ---------- accusé de réception (déclenché seulement si le LLM tarde) ---------- */
+const ACK = {
+  court: ["Reçu.", "Mmh.", "Compris.", "Bien reçu."],
+  reflexion: ["Hm. Voyons.", "Une seconde.", "Je réfléchis."],
+  drole: ["Reçu. Je fais semblant d'être surpris.", "Mmh. Passionnant.", "Compris. Évidemment."],
+};
+function pickAck(text) {
+  const long = text.length > 80 || /expliqu|pourquoi|comment|compar/i.test(text);
+  let pool = long ? ACK.reflexion : ACK.court;
+  if (settings.humour >= 70) pool = pool.concat(ACK.drole);
+  if (settings.humour <= 30) pool = ["Reçu.", "Compris."];
+  pool = pool.filter(a => a !== lastAck);
+  return (lastAck = pool[Math.floor(Math.random() * pool.length)]);
+}
+
+/* ---------- reconnaissance vocale ---------- */
+function stopRec() { const r = rec; rec = null; if (r) { try { r.abort(); } catch (e) {} } }
+function wantsMic() { return session && (state === "listening" || $("#casque").checked); }
+
+function listen() {
+  if (!SR || !session) return;
+  stopRec();
+  const me = new SR(); rec = me;
+  me.lang = "fr-FR"; me.interimResults = true; me.continuous = false;
+  me.onresult = e => {
+    if (rec !== me) return;
+    let txt = "", fin = false;
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      txt += e.results[i][0].transcript; if (e.results[i].isFinal) fin = true;
+    }
+    if (state !== "listening" && $("#casque").checked && txt.trim().length > 2) interrupt(false); // barge-in
+    if (state === "listening") $("#you").textContent = txt;
+    if (fin && state === "listening") { stopRec(); send(txt.trim()); }
+  };
+  me.onerror = e => {
+    if (rec !== me) return;
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      note("Micro refusé. Autorisez-le dans les réglages du site, puis touchez le monolithe.", true);
+      endSession();
+    }
+  };
+  me.onend = () => { if (rec === me && wantsMic()) setTimeout(() => { if (rec === me) listen(); }, 150); };
+  try { me.start(); } catch (e) { /* déjà démarrée */ }
+}
+
+/* ---------- flux conversation ---------- */
+function maybeResume() {
+  if (streaming || pending > 0 || !session) return;
+  setState("listening");
+  if (!rec) listen();
+}
+
+function interrupt(resume = true) {
+  gen++; pending = 0; streaming = false; clearTimeout(ackTimer);
+  if (ctrl) ctrl.abort();
+  speechSynthesis.cancel();
+  setState("listening");
+  if (resume && session && !rec) listen();
+}
+
+function onEvent(ev, g) {
+  if (g !== gen) return;
+  if (ev.s) {
+    if (!gotFirst) { gotFirst = true; clearTimeout(ackTimer); setState("speaking"); }
+    $("#tars").textContent += (ev.error ? "" : ($("#tars").textContent ? " " : "")) + ev.s;
+    say(ev.s);
+  }
+  if (ev.error) note(ev.error, true);
+  if (ev.done && ev.settings) { settings = ev.settings; renderGauges(); }
+}
+
+async function send(text) {
+  if (!text) { maybeResume(); return; }
+  interrupt(false);
+  const g = gen;
+  $("#you").textContent = text; $("#tars").textContent = "";
+  setState("thinking"); streaming = true; gotFirst = false;
+  ackTimer = setTimeout(() => { if (!gotFirst && g === gen) say(pickAck(text)); }, 250);
+  ctrl = new AbortController();
+  try {
+    const r = await fetch("/chat", {
+      method: "POST", signal: ctrl.signal,
+      headers: { "Content-Type": "application/json", "X-Tars-Token": TOKEN },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error(r.status === 401 ? "Jeton refusé : ajoutez ?t=VOTRE_JETON à l'adresse." : "Erreur serveur " + r.status);
+    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await rd.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (line) onEvent(JSON.parse(line), g);
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError" && g === gen) note("Liaison coupée : " + e.message, true);
+  } finally {
+    if (g === gen) { streaming = false; clearTimeout(ackTimer); maybeResume(); }
+  }
+}
+
+/* ---------- session ---------- */
+async function startSession() {
+  if (!SR) { note("Reconnaissance vocale absente de ce navigateur : utilisez Chrome, ou le champ texte.", true); return; }
+  session = true; setState("listening"); listen();
+  try { wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+function endSession() {
+  session = false; interrupt(false); stopRec(); setState("off");
+  if (wake) { wake.release().catch(() => {}); wake = null; }
+}
+
+$("#slab").addEventListener("click", () => {
+  if (state === "off") startSession();
+  else if (state === "thinking" || state === "speaking") interrupt(true);
+  else endSession();
+});
+$("#form").addEventListener("submit", e => {
+  e.preventDefault();
+  const t = $("#txt").value.trim(); $("#txt").value = "";
+  if (t) { stopRec(); send(t); }
+});
+$("#casque").addEventListener("change", () => { if (session && $("#casque").checked && !rec) listen(); });
+
+renderGauges();
+fetch("/state", { headers: { "X-Tars-Token": TOKEN } }).then(r => r.ok ? r.json() : null)
+  .then(s => { if (s) { settings = s; renderGauges(); } }).catch(() => {});
+</script>
+</body>
+</html>
