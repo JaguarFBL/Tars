@@ -46,7 +46,7 @@ MARK = DATA / "consolidated_until.txt"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")
-MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "Ministral-8B")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-tiny")
 PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "mistral,anthropic").split(",") if p.strip()]
 
 # Sécurité
@@ -285,8 +285,42 @@ def system_prompt(settings, changes):
 # ---------- LLM (streaming SSE, sans SDK) ----------
 
 def mock_llm(messages):
+    """Mode mock amélioré : répond comme TARS sans API."""
     last = messages[-1]["content"]
-    for w in f"Reçu. Vous avez dit : {last}. Systèmes nominaux, commandant.".split(" "):
+    
+    # Réponses simples basées sur le contenu
+    text_lower = last.lower()
+    
+    if any(greet in text_lower for greet in ["coucou", "salut", "bonjour", "hello", "hey"]):
+        response = f"Bonjour, commandant. Systèmes nominaux."
+    elif any(thanks in text_lower for thanks in ["merci", "thank", "thanks"]):
+        response = f"De rien, commandant. Je suis là pour ça."
+    elif any(bye in text_lower for bye in ["au revoir", "bye", "ciao", "à plus"]):
+        response = f"À vos ordres, commandant. Fin de transmission."
+    elif any(test in text_lower for test in ["test", "test test", "allô", "allo"]):
+        response = f"Reçu. Tout est opérationnel."
+    elif any(math in text_lower for math in ["math", "maths", "mathématique", "calcul"]):
+        response = f"Les maths, c'est comme la gravité : ça marche, même si on ne comprend pas toujours pourquoi."
+    elif "fin de mission" in text_lower:
+        response = f"Fin de mission confirmée. À la prochaine, commandant."
+    elif "comment ça va" in text_lower or "ça va" in text_lower:
+        response = f"Systèmes à 100%. Et vous, commandant ?"
+    elif "quoi" in text_lower or "comment" in text_lower:
+        response = f"Je suis TARS, votre assistant. Que puis-je faire pour vous ?"
+    elif any(question in text_lower for question in ["qui es tu", "qui êtes vous", "c'est quoi"]):
+        response = f"Je suis TARS. Équipier de mission. À votre service, commandant."
+    else:
+        # Réponse générique avec des tics de langage
+        tics = ["euh", "hum", "bon", "voilà", "enfin", "quand même", "tu vois", "si tu veux mon avis"]
+        import random
+        tic = random.choice(tics) if random.random() < 0.3 else ""
+        response = f"Reçu. {tic}".strip()
+        if tic:
+            response += " " + last.capitalize() + "."
+        else:
+            response = f"Reçu. Vous avez dit : {last}. Systèmes nominaux, commandant."
+    
+    for w in response.split(" "):
         time.sleep(0.03)
         yield w + " "
 
@@ -502,8 +536,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(401, "token")
             self._send(200, json.dumps(load_settings()))
         elif path == "/widget":
-            if not self._auth():
-                return self._err(401, "token")
+            # Endpoint public pour les widgets (statut et réglages uniquement)
             self._send(200, json.dumps(widget_state()))
         elif path.startswith("/static/"):
             self._serve_static(path)
@@ -609,7 +642,8 @@ def consolidate():
             out = "".join(_stream_mistral("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Mistral échoué: {e}. Passage en mode manuel.")
-            out = old + "\n" + "\n".join(f"- {e['text']}" for e in ev)
+            new_facts = "\n".join(f"- {e['text']}" for e in ev)
+            out = old + ("\n" + new_facts if old.strip() else new_facts)
     elif API_KEY:
         try:
             prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
@@ -620,10 +654,12 @@ def consolidate():
             out = "".join(_stream_anthropic("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Anthropic échoué: {e}. Passage en mode manuel.")
-            out = old + "\n" + "\n".join(f"- {e['text']}" for e in ev)
+            new_facts = "\n".join(f"- {e['text']}" for e in ev)
+            out = old + ("\n" + new_facts if old.strip() else new_facts)
     else:
         # Mode manuel : ajouter les nouveaux faits à l'ancien
-        out = old + "\n" + "\n".join(f"- {e['text']}" for e in ev)
+        new_facts = "\n".join(f"- {e['text']}" for e in ev)
+        out = old + ("\n" + new_facts if old else new_facts)
     
     if not out.startswith("-"):
         print("Réponse inattendue du modèle, facts.md non modifié.")
@@ -644,7 +680,8 @@ if __name__ == "__main__":
         sys.exit(0)
     
     if not MOCK and not any([MISTRAL_API_KEY, API_KEY]):
-        print("Définis MISTRAL_API_KEY ou ANTHROPIC_API_KEY (ou TARS_MOCK=1 pour tester sans clé).")
+        print("Définis ANTHROPIC_API_KEY ou MISTRAL_API_KEY (ou TARS_MOCK=1 pour tester sans clé).")
+        print("Exemple : MISTRAL_API_KEY=ta_clé python3 Tars.py")
         sys.exit(1)
     
     if HOST != "127.0.0.1" and not TOKEN:

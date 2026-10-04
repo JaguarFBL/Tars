@@ -62,8 +62,8 @@ Tars/
 # Cloner le dépôt
 cd Tars
 
-# Installer les dépendances (aucune pour le backend, c'est du stdlib)
-# Si vous voulez générer des clips audio :
+# Aucune dépendance pour le backend (stdlib uniquement)
+# Pour générer des clips audio (optionnel) :
 pip install gtts pydub  # Pour gTTS
 # OU
 pip install piper-tts    # Pour Piper (local)
@@ -71,14 +71,27 @@ pip install piper-tts    # Pour Piper (local)
 
 #### Démarrer le backend
 ```bash
-# Mode normal (avec APIs cloud si disponibles)
-python3 Tars.py
+# Avec votre clé Mistral (recommandé)
+MISTRAL_API_KEY=votre_clé_ici python3 Tars.py
 
-# Mode mock (sans APIs, pour tester)
+# Avec votre clé Anthropic
+ANTHROPIC_API_KEY=votre_clé_ici python3 Tars.py
+
+# Mode mock (100% local, sans API, réponses basiques)
 TARS_MOCK=1 python3 Tars.py
 
-# Consolider le journal (optionnel)
+# Consolider le journal (pour sauvegarder les faits)
 python3 Tars.py consolidate
+```
+
+#### Configuration rapide
+```bash
+# Créer un alias pour lancer facilement (Termux/Linux/Mac)
+echo "alias tars='MISTRAL_API_KEY=mstrl_votre_clé_ici python3 ~/Tars/Tars.py'" >> ~/.bashrc
+source ~/.bashrc
+
+# Puis simplement :
+tars
 ```
 
 Le backend sera accessible à : **http://localhost:8000**
@@ -125,11 +138,12 @@ Voir : [windows/README.md](windows/README.md)
 
 ### Backend (Tars.py)
 - **Serveur HTTP** : Gère les requêtes du frontend
-- **LLM** : Streaming avec Anthropic (ou mode mock)
+- **LLM** : Streaming avec Mistral/Anthropic (ou mode mock 100% local)
 - **Mémoire** : Journal append-only + consolidation nocturne
 - **Réglages** : Humour et honnêteté persistants
 - **Endpoint `/widget`** : Pour les widgets (Android/Windows)
-- **Fallback** : Si Anthropic échoue, bascule en mode mock
+- **Fallback** : Si les APIs échouent, bascule en mode mock
+- **Sécurité** : Protection contre path traversal, token obligatoire pour les endpoints sensibles
 
 ### Frontend (index.html)
 - **Interface minimaliste** : Bouton monolithe, affichage des messages
