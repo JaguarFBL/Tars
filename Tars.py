@@ -41,12 +41,13 @@ DATA.mkdir(parents=True, exist_ok=True)
 STATIC = (ROOT / "static").resolve()
 JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "settings.json"
 MARK = DATA / "consolidated_until.txt"
+FACTS_BAK = DATA / "facts.md.bak"
 
 # Clés API
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")
-MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-tiny")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "open-mistral-7b")
 PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "mistral,anthropic").split(",") if p.strip()]
 
 # Sécurité
@@ -467,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _auth(self):
-        if not TOKEN:
+        if not TOKEN and HOST != "127.0.0.1":
             return True
         got = self.headers.get("X-Tars-Token", "")
         return hmac.compare_digest(got.encode("utf-8"), TOKEN.encode("utf-8"))
@@ -570,6 +571,16 @@ class Handler(BaseHTTPRequestHandler):
 
         set_status("thinking")
         gen, prev, messages = begin_turn(text)
+
+        # Initialiser la réponse HTTP pour le streaming SSE
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Tars-Token")
+        self.end_headers()
 
         reply, buf, first = "", "", True
         try:

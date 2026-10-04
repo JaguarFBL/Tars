@@ -17,7 +17,7 @@ function createWindow() {
   });
 
   // Charger index.html depuis le même dossier
-  mainWindow.loadFile('index.html');
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
   // Démarrer le backend
   startBackend();

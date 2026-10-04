@@ -481,7 +481,7 @@
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = `http://localhost:${new URLSearchParams(window.location.search).get('port') || 8000}`;
 const TOKEN = "";
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -537,10 +537,18 @@ function renderGauges() {
 function addToHistory(userText, tarsText) {
   const historyDiv = $("#history");
   if (userText) {
-    historyDiv.innerHTML += `<p class="user"><strong>Toi:</strong> ${userText}</p>`;
+    const userPara = document.createElement('p');
+    userPara.className = 'user';
+    userPara.innerHTML = '<strong>Toi:</strong> ';
+    userPara.appendChild(document.createTextNode(userText));
+    historyDiv.appendChild(userPara);
   }
   if (tarsText) {
-    historyDiv.innerHTML += `<p class="tars"><strong>TARS:</strong> ${tarsText}</p>`;
+    const tarsPara = document.createElement('p');
+    tarsPara.className = 'tars';
+    tarsPara.innerHTML = '<strong>TARS:</strong> ';
+    tarsPara.appendChild(document.createTextNode(tarsText));
+    historyDiv.appendChild(tarsPara);
   }
   historyDiv.scrollTop = historyDiv.scrollHeight;
 }
@@ -567,19 +575,22 @@ function loadAudioClips() {
     });
   }
   
-  if (ACK_AUDIO.court.length === 0) {
-    const dummyClips = {
-      court: ["recu", "mmh", "compris", "bien_recus", "ok"],
-      reflexion: ["hm_voyons", "une_seconde", "je_reflechis", "laissez_moi_verifier", "attendez"],
-      drole: ["recu_je_fais_semblant", "mmh_passionnant", "compris_evidemment", "bien_recus_enfin", "ok_si_vous_le_dites"]
-    };
-    for (const [category, clips] of Object.entries(dummyClips)) {
-      clips.forEach(clip => {
-        const audio = new Audio(`${BACKEND_URL}/static/acks/${category}/${clip}.mp3`);
-        audio.preload = "auto";
-        ACK_AUDIO[category].push(audio);
-      });
-    }
+  // Charger les clips dummy si les fichiers audio ne sont pas trouvés
+  const dummyClips = {
+    court: ["recu", "mmh", "compris", "bien_recus", "ok"],
+    reflexion: ["hm_voyons", "une_seconde", "je_reflechis", "laissez_moi_verifier", "attendez"],
+    drole: ["recu_je_fais_semblant", "mmh_passionnant", "compris_evidemment", "bien_recus_enfin", "ok_si_vous_le_dites"]
+  };
+  for (const [category, clips] of Object.entries(dummyClips)) {
+    clips.forEach(clip => {
+      const audio = new Audio(`${BACKEND_URL}/static/acks/${category}/${clip}.mp3`);
+      audio.preload = "auto";
+      audio.onerror = () => {
+        // Si le fichier n'existe pas, on passe (le fallback TTS sera utilisé)
+        console.warn(`Clip audio non trouvé: ${category}/${clip}.mp3`);
+      };
+      ACK_AUDIO[category].push(audio);
+    });
   }
 }
 
@@ -615,7 +626,8 @@ function say(text) {
   if (isWidget) return;
   
   const clip = pickAck(text);
-  if (clip && !clip.paused) {
+  if (clip) {
+    clip.currentTime = 0;
     const playPromise = clip.play();
     if (playPromise !== undefined) {
       playPromise.catch(e => {
@@ -738,7 +750,7 @@ async function send(text) {
   streaming = true; 
   gotFirst = false;
   ackTimer = setTimeout(() => { 
-    if (!gotFirst && g === gen) say(pickAck(text)); 
+    if (!gotFirst && g === gen) say(text); 
   }, 250);
   ctrl = new AbortController();
   
