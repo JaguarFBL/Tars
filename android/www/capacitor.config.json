@@ -1,0 +1,6 @@
+{
+  "appId": "com.example.tars",
+  "appName": "TARS pas tars",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

@@ -1,0 +1,17 @@
+{
+  "name": "tars-app",
+  "version": "1.0.0",
+  "description": "TARS pas tars - Application Android",
+  "main": "index.html",
+  "scripts": {
+    "build": "npx cap sync android",
+    "open:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^5.0.0",
+    "@capacitor/android": "^5.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^5.0.0"
+  }
+}

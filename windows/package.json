@@ -1,0 +1,41 @@
+{
+  "name": "tars-windows",
+  "version": "1.0.0",
+  "description": "TARS pas tars - Application Windows",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "build-exe": "pyinstaller --onefile --windowed ../Tars.py",
+    "copy-exe": "cp ../dist/Tars.exe ."
+  },
+  "dependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.3"
+  },
+  "build": {
+    "appId": "com.example.tars",
+    "productName": "TARS pas tars",
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "icon.ico"
+    },
+    "files": [
+      "Tars.exe",
+      "index.html",
+      "preload.js",
+      "static/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "Tars.exe",
+        "to": ".",
+        "filter": ["**/*"]
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  }
+}

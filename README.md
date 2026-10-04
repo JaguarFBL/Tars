@@ -1,49 +1,288 @@
-# Tars
-Tars mais pas tars car j'ai pas les droits d'auteurs et parce que j'ai pas encore d'idée
+# Tars pas tars
 
-# Projet : "Tars pas tars", assistant vocal personnel avec personnalité TARS (Interstellar)
+**Assistant vocal personnel avec personnalité TARS (Interstellar) - Version 100% locale**
 
-## Objectif
-Assistant vocal quasi instantané (cible : < 1 s entre la fin de ma phrase et le début de la réponse), avec mémoire persistante et personnage role play : TARS est un équipier sec et ironique, je suis le commandant.
+---
 
-## Pipeline
-vocal → STT → texte → LLM (avec accès à des tools) → réponse → TTS → vocal
-La mémoire est lue avant la réponse et écrite après.
+## 🎯 Objectif
 
-## Contraintes techniques
-- APIs cloud pour STT, LLM et TTS (pas de modèle local, la latence prime).
-- Streaming partout (STT, LLM, TTS), connexion WebSocket persistante.
-- VAD (détection de fin de parole) en local sur l'appareil.
-- Gestion de l'interruption (barge-in) : si je parle pendant la réponse, tout s'arrête net.
+Créer un assistant vocal **ultra-rapide** (< 1s de latence) avec la personnalité de TARS, **100% fonctionnel en local** (sans dépendance à un Raspberry Pi ou à des APIs externes, sauf optionnellement pour le LLM).
 
-## Latence : accusé de réception instantané
-- Clips audio préenregistrés (même voix TTS, mêmes réglages que les réponses), joués en local en < 100 ms.
-- Déclenchés uniquement si le premier token du LLM n'est pas arrivé après ~250 ms (sinon on ne joue rien).
-- Trois familles : court ("Reçu.", "Mmh."), outil ("Je regarde."), réflexion ("Hm. Bonne question.").
-- 5 à 10 variantes par famille, tirage aléatoire sans répétition consécutive.
-- Pas de chevauchement avec la vraie réponse (file d'attente jusqu'à la fin du clip) ; coupé net si interruption.
-- Les clips dépendent du réglage d'humour.
+**Nouveautés** :
+- ✅ **100% local** : Plus besoin de Raspberry Pi, tout tourne sur l'appareil
+- ✅ **Applications natives** : Android (via Capacitor) et Windows (via Electron)
+- ✅ **Widgets** : Widget Android natif + Widget Windows (Rainmeter)
+- ✅ **Fallback intégré** : Si le backend est down, bascule en mode local
+- ✅ **Clips audio** : Accusés de réception préenregistrés (optionnels)
 
-## Personnage et réglages
-- Paramètres humour et honnêteté (0-100 %) réglables à l'oral ("TARS, humour à 60 %"), stockés dans la mémoire, persistants.
-- TARS répond de façon sèche la plupart du temps ; l'humour n'arrive que sur un silence ou une mauvaise nouvelle.
-- Il confirme un changement de réglage dans le personnage.
-- Voix TTS un peu plate/métallique pour l'effet robot.
-- Idées optionnelles : mode mission (briefings courts, points d'étape, rapport de fin) et journal de bord quotidien à la première personne.
+---
 
-## Mémoire et infra
-- Le Raspberry Pi 5 est la source de vérité de la mémoire et reste hors du chemin audio : les appareils (PC, téléphones) parlent directement aux APIs.
-- Au démarrage de session, un paquet de contexte (réglages + faits récents) est chargé depuis le Pi dans le prompt ; aucun aller-retour vers le Pi pendant la conversation.
-- Écriture mémoire asynchrone, après la réponse vocale.
-- Mémoire sous forme de journal append-only d'événements, avec consolidation nocturne sur le Pi en faits propres.
+## 📁 Structure du Projet
 
-## À trancher
-- Cascade STT→LLM→TTS (plus de contrôle sur voix et mémoire) ou API speech-to-speech temps réel (plus rapide, moins de contrôle).
-- Mémoire locale sur chaque appareil avec synchro, ou clients légers sans mémoire locale.
-- Budget mensuel pour les APIs.
+```
+Tars/
+├── Tars.py                  # Backend Python (serveur HTTP + LLM)
+├── index.html               # Frontend web (interface utilisateur)
+├── generate_acks.py         # Script pour générer les clips audio
+├── data/                    # Données locales (mémoire, réglages)
+│   ├── journal.jsonl        # Journal des événements
+│   ├── facts.md             # Faits consolidés
+│   ├── settings.json        # Réglages (humour, honnêteté)
+│   └── consolidated_until.txt
+├── static/                  # Fichiers statiques
+│   └── acks/                # Clips audio pour accusés de réception
+│       ├── court/           # Accusés courts (Reçu, Mmh, etc.)
+│       ├── reflexion/       # Accusés de réflexion
+│       └── drole/           # Accusés drôles
+├── android/                 # Application Android
+│   ├── www/                # Frontend pour Android
+│   ├── app/                # Code natif Android
+│   ├── capacitor.config.json
+│   └── README.md
+└── windows/                 # Application Windows
+    ├── main.js             # Point d'entrée Electron
+    ├── preload.js          # Pré-chargement
+    ├── TarsWidget.ini      # Widget Rainmeter
+    ├── TarsWidget.lua      # Script Lua pour le widget
+    └── README.md
+```
 
-## Hors périmètre
-Pas de rapports de statut du Pi, pas de lien avec l'agent Ultron.
+---
 
-## Ce que j'attends de toi
-[à compléter : ex. "propose l'architecture détaillée", "écris le code du pipeline en Python", "génère le prompt système du personnage"]
+## 🚀 Installation et Utilisation
+
+### 1. Prérequis Communs
+- **Python 3.8+** (pour le backend)
+- **Node.js 18+** (pour les applications Android/Windows)
+
+### 2. Backend (Tars.py)
+
+#### Installation
+```bash
+# Cloner le dépôt
+cd Tars
+
+# Installer les dépendances (aucune pour le backend, c'est du stdlib)
+# Si vous voulez générer des clips audio :
+pip install gtts pydub  # Pour gTTS
+# OU
+pip install piper-tts    # Pour Piper (local)
+```
+
+#### Démarrer le backend
+```bash
+# Mode normal (avec APIs cloud si disponibles)
+python3 Tars.py
+
+# Mode mock (sans APIs, pour tester)
+TARS_MOCK=1 python3 Tars.py
+
+# Consolider le journal (optionnel)
+python3 Tars.py consolidate
+```
+
+Le backend sera accessible à : **http://localhost:8000**
+
+#### Générer les clips audio
+```bash
+# Générer des clips dummy (pour test)
+python3 generate_acks.py --method dummy
+
+# Générer avec gTTS (nécessite internet)
+python3 generate_acks.py --method gtts
+
+# Générer avec Piper (nécessite un modèle local)
+python3 generate_acks.py --method piper
+```
+
+### 3. Application Android
+
+Voir : [android/README.md](android/README.md)
+
+### 4. Application Windows
+
+Voir : [windows/README.md](windows/README.md)
+
+---
+
+## 📱 Applications Natives
+
+### Android
+- **Technologie** : Capacitor + WebView
+- **Backend** : Exécuté via Termux (ou Chaquopy pour une intégration complète)
+- **Widget** : Widget natif Android
+- **Installation** : Builder l'APK avec Android Studio
+
+### Windows
+- **Technologie** : Electron
+- **Backend** : `Tars.exe` (généré avec PyInstaller)
+- **Widget** : Rainmeter (optionnel)
+- **Installation** : Builder l'installateur avec `npm run dist`
+
+---
+
+## 🎛️ Fonctionnalités
+
+### Backend (Tars.py)
+- **Serveur HTTP** : Gère les requêtes du frontend
+- **LLM** : Streaming avec Anthropic (ou mode mock)
+- **Mémoire** : Journal append-only + consolidation nocturne
+- **Réglages** : Humour et honnêteté persistants
+- **Endpoint `/widget`** : Pour les widgets (Android/Windows)
+- **Fallback** : Si Anthropic échoue, bascule en mode mock
+
+### Frontend (index.html)
+- **Interface minimaliste** : Bouton monolithe, affichage des messages
+- **Reconnaissance vocale** : Web Speech API (Chrome/Edge)
+- **Synthèse vocale** : Web Speech API (voix robotique)
+- **Streaming** : Réception des réponses en temps réel
+- **Barge-in** : Interruption si l'utilisateur parle pendant la réponse
+- **Accusés de réception** : Clips audio ou synthèse vocale
+- **Mode widget** : Affichage minimal pour les widgets
+
+### Widgets
+- **Android** : Widget natif avec état et bouton de contrôle
+- **Windows** : Widget Rainmeter avec état et bouton
+
+---
+
+## 🔧 Configuration
+
+### Variables d'Environnement
+| Variable | Description | Défaut | Obligatoire |
+|----------|-------------|--------|--------------|
+| `TARS_DATA` | Dossier des données | `./data` | Non |
+| `ANTHROPIC_API_KEY` | Clé API Anthropic | - | Non (mode mock disponible) |
+| `TARS_MODEL` | Modèle Anthropic | `claude-haiku-4-5-20251001` | Non |
+| `TARS_TOKEN` | Token de sécurité | - | Non (uniquement si `HOST != 127.0.0.1`) |
+| `TARS_HOST` | Hôte du serveur | `127.0.0.1` | Non |
+| `TARS_PORT` | Port du serveur | `8000` | Non |
+| `TARS_MOCK` | Mode mock | `0` | Non |
+
+### Exemple
+```bash
+# Démarrer avec un modèle spécifique et en mode mock
+TARS_MODEL=claude-3-sonnet-20240229 TARS_MOCK=1 python3 Tars.py
+
+# Démarrer avec une clé API Anthropic
+ANTHROPIC_API_KEY=sk-... python3 Tars.py
+```
+
+---
+
+## 💬 Commandes Vocales
+
+### Réglages
+- "TARS, humour à 60 %" → Règle l'humour à 60%
+- "TARS, honnêteté à 90 %" → Règle l'honnêteté à 90%
+
+### Mémoire
+- "TARS, retiens que j'aime le café" → Ajoute un fait
+- "TARS, souviens-toi que la mission est importante" → Ajoute un fait
+
+### Contrôle
+- "fin de mission" → Quitte le personnage TARS
+
+---
+
+## 🎨 Personnalisation
+
+### Voix
+- **Web Speech API** : Utilise la voix française par défaut
+- **Clips audio** : Pour les accusés de réception (optionnel)
+- **Paramètres** : `pitch: 0.7`, `rate: 1.08` pour un effet robotique
+
+### Personnage
+- **Humour** : 0-100% (0 = factuel, 100 = ironique)
+- **Honnêteté** : 0-100% (0 = tactique, 100 = franc)
+
+### Accusés de Réception
+- **Court** : "Reçu.", "Mmh.", "Compris."
+- **Réflexion** : "Hm. Voyons.", "Une seconde."
+- **Drôle** : "Reçu. Je fais semblant d'être surpris."
+
+---
+
+## 📊 Pipeline Technique
+
+```
+Vocal (utilisateur)
+    ↓ [Web Speech API - STT]
+Texte
+    ↓ [POST /chat]
+Backend (Tars.py)
+    ↓ [LLM Streaming]
+Réponse texte
+    ↓ [Streaming SSE]
+Frontend
+    ↓ [Web Speech API - TTS]
+Vocal (TARS)
+```
+
+---
+
+## 🔌 Intégration avec des APIs Cloud (Optionnel)
+
+### STT (Speech-to-Text)
+- **Web Speech API** (intégré, côté client)
+- **AssemblyAI** (recommandé pour le serveur)
+- **Whisper** (local, via `whisper.cpp`)
+
+### LLM (Large Language Model)
+- **Anthropic Claude** (intégré, streaming)
+- **Llama.cpp** (local)
+- **Mistral** (local)
+
+### TTS (Text-to-Speech)
+- **Web Speech API** (intégré, côté client)
+- **ElevenLabs** (recommandé pour le serveur)
+- **Piper** (local)
+
+---
+
+## 🐛 Dépannage
+
+### Le backend ne démarre pas
+- Vérifiez que Python 3.8+ est installé
+- Exécutez `python3 Tars.py` manuellement pour voir les erreurs
+- Vérifiez que le port 8000 est libre
+
+### Le frontend ne se connecte pas
+- Vérifiez que le backend est en cours d'exécution
+- Essayez d'ouvrir `http://localhost:8000` dans un navigateur
+- Vérifiez la console du navigateur (F12)
+
+### La reconnaissance vocale ne fonctionne pas
+- Utilisez **Chrome** ou **Edge** (Web Speech API nécessaire)
+- Autorisez l'accès au micro dans les paramètres du navigateur
+- Vérifiez que le micro fonctionne (testez avec un autre site)
+
+### Les clips audio ne se jouent pas
+- Vérifiez que les fichiers existent dans `static/acks/`
+- Vérifiez que le serveur les sert correctement (`http://localhost:8000/static/acks/court/recu.mp3`)
+- Essayez de générer les clips avec `generate_acks.py`
+
+---
+
+## 📚 Documentation Complète
+
+- [Android](android/README.md)
+- [Windows](windows/README.md)
+- [Backend](Tars.py) (commentaires dans le code)
+- [Frontend](index.html) (commentaires dans le code)
+
+---
+
+## 🤝 Contribution
+
+1. Fork le projet
+2. Créez une branche (`git checkout -b feature/ma-fonctionnalité`)
+3. Commitez vos changements (`git commit -m 'Ajout de ma fonctionnalité'`)
+4. Poussez vers la branche (`git push origin feature/ma-fonctionnalité`)
+5. Ouvrez une Pull Request
+
+---
+
+## 📜 Licence
+
+MIT

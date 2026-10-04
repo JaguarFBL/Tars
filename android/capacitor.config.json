@@ -1,0 +1,21 @@
+{
+  "appId": "com.example.tars",
+  "appName": "TARS pas tars",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "TarsPlugin": {
+      "className": "com.example.tars.TarsPlugin"
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "assetsDir": "assets",
+    "buildOptions": {
+      "keystorePath": null,
+      "keystorePassword": null,
+      "keystoreAlias": null,
+      "keystoreAliasPassword": null
+    }
+  }
+}
