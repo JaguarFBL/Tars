@@ -25,7 +25,9 @@ JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "se
 MARK = DATA / "consolidated_until.txt"
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")  # rapide : la latence prime
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-tiny")
 TOKEN = os.environ.get("TARS_TOKEN", "")  # optionnel, même en local pour la compatibilité
 HOST = os.environ.get("TARS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TARS_PORT", "8000"))
@@ -176,19 +178,59 @@ def _stream_anthropic(system, messages, max_tokens=400):
         raise RuntimeError(f"API {e.code}: {e.read().decode('utf-8', 'replace')[:200]}") from None
 
 
+def _stream_mistral(system, messages, max_tokens=400):
+    """Streaming avec Mistral (nécessite MISTRAL_API_KEY)"""
+    if not MISTRAL_API_KEY:
+        raise RuntimeError("MISTRAL_API_KEY manquante")
+    body = json.dumps({
+        "model": MISTRAL_MODEL,
+        "messages": [{"role": "system", "content": system}] + messages,
+        "max_tokens": max_tokens,
+        "stream": True
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.mistral.ai/v1/chat/completions", data=body, method="POST",
+        headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            for raw in r:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line or line == "data: [DONE]":
+                    continue
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                ev = json.loads(line)
+                if ev.get("choices") and ev["choices"][0].get("delta").get("content"):
+                    yield ev["choices"][0]["delta"]["content"]
+    except Exception as e:
+        raise RuntimeError(f"Mistral API error: {e}") from None
+
+
 def stream_llm(system, messages, max_tokens=400):
-    """Streaming LLM avec fallback local si Anthropic échoue"""
+    """Streaming LLM avec fallback : Mistral -> Anthropic -> Mock"""
     if MOCK:
         yield from mock_llm(messages)
         return
     
-    # Essayer Anthropic d'abord
-    try:
-        yield from _stream_anthropic(system, messages, max_tokens)
-        return
-    except Exception as e:
-        print(f"[FALLBACK] Anthropic échoué: {e}. Passage en mode mock.")
-        yield from mock_llm(messages)
+    # Essayer Mistral d'abord (priorité)
+    if MISTRAL_API_KEY:
+        try:
+            yield from _stream_mistral(system, messages, max_tokens)
+            return
+        except Exception as e:
+            print(f"[FALLBACK] Mistral échoué: {e}")
+    
+    # Essayer Anthropic
+    if API_KEY:
+        try:
+            yield from _stream_anthropic(system, messages, max_tokens)
+            return
+        except Exception as e:
+            print(f"[FALLBACK] Anthropic échoué: {e}")
+    
+    # Fallback final : mock
+    print("[FALLBACK] Passage en mode mock")
+    yield from mock_llm(messages)
 
 
 _END = re.compile(r"(?<=[.!?\u2026])\s+")
@@ -379,8 +421,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         consolidate()
         sys.exit(0)
-    if not MOCK and not API_KEY:
-        print("[INFO] Pas de ANTHROPIC_API_KEY. Utilisation du mode mock (LLM local simulé).")
+    if not MOCK and not MISTRAL_API_KEY and not API_KEY:
+        print("[INFO] Pas de MISTRAL_API_KEY ou ANTHROPIC_API_KEY. Utilisation du mode mock (LLM local simulé).")
     if HOST != "127.0.0.1" and not TOKEN:
         sys.exit("TARS_HOST ouvert au réseau : définis TARS_TOKEN.")
     
