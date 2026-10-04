@@ -190,18 +190,33 @@ const ACK_AUDIO = {
 
 // Charger les clips audio si disponibles
 function loadAudioClips() {
-  const clipPaths = {
-    court: ["recu", "mmh", "compris", "bien_recus"],
-    reflexion: ["hm_voyons", "une_seconde", "je_reflechis"],
-    drole: ["recu_je_fais_semblant", "mmh_passionnant", "compris_evidemment"]
+  const originalClips = {
+    court: ["affirmative", "systems_nominal", "yes", "roger_that"],
+    reflexion: ["humor_100", "calculating", "working"],
+    drole: ["not_babysitter", "sarcasm", "joke"]
   };
   
-  for (const [category, clips] of Object.entries(clipPaths)) {
+  for (const [category, clips] of Object.entries(originalClips)) {
     clips.forEach(clip => {
-      const audio = new Audio(`${BACKEND_URL}/static/acks/${category}/${clip}.mp3`);
+      const audio = new Audio(`${BACKEND_URL}/static/acks/tars_original/${clip}.mp3`);
       audio.preload = "auto";
       ACK_AUDIO[category].push(audio);
     });
+  }
+  
+  if (ACK_AUDIO.court.length === 0) {
+    const dummyClips = {
+      court: ["recu", "mmh", "compris", "bien_recus", "ok"],
+      reflexion: ["hm_voyons", "une_seconde", "je_reflechis", "laissez_moi_verifier", "attendez"],
+      drole: ["recu_je_fais_semblant", "mmh_passionnant", "compris_evidemment", "bien_recus_enfin", "ok_si_vous_le_dites"]
+    };
+    for (const [category, clips] of Object.entries(dummyClips)) {
+      clips.forEach(clip => {
+        const audio = new Audio(`${BACKEND_URL}/static/acks/${category}/${clip}.mp3`);
+        audio.preload = "auto";
+        ACK_AUDIO[category].push(audio);
+      });
+    }
   }
 }
 
