@@ -46,7 +46,7 @@ MARK = DATA / "consolidated_until.txt"
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")
-MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-tiny")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "Ministral-8B")
 PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "mistral,anthropic").split(",") if p.strip()]
 
 # Sécurité
@@ -502,6 +502,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(401, "token")
             self._send(200, json.dumps(load_settings()))
         elif path == "/widget":
+            if not self._auth():
+                return self._err(401, "token")
             self._send(200, json.dumps(widget_state()))
         elif path.startswith("/static/"):
             self._serve_static(path)

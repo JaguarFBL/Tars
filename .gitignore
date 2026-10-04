@@ -1,0 +1,36 @@
+# Données locales (mémoire, réglages, faits)
+data/
+
+# Fichiers audio (clips, TTS)
+*.mp3
+*.wav
+*.ogg
+*.flac
+
+# Fichiers temporaires
+*.tmp
+*.bak
+*.swp
+
+# Fichiers Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Fichiers IDE
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environnement local
+.env
+.env.local
+.env.*.local

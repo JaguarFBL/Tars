@@ -478,7 +478,7 @@ fetch("/state", { headers: { "X-Tars-Token": TOKEN } })
 // Mettre à jour le widget régulièrement (si en mode widget)
 if (isWidget) {
   setInterval(() => {
-    fetch(`${BACKEND_URL}/widget`)
+    fetch(`${BACKEND_URL}/widget`, { headers: { "X-Tars-Token": TOKEN } })
       .then(r => r.json())
       .then(data => {
         if (data.status) {
