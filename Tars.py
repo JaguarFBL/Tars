@@ -7,18 +7,22 @@ Nuit :     python3 Tars.py consolidate     (journal -> faits propres)
 Test :     TARS_MOCK=1 python3 Tars.py     (faux LLM, aucune clé nécessaire)
 
 Variables d'environnement :
-  TARS_TOKEN       : Token pour l'API (header X-Tars-Token)
+  TARS_TOKEN       : Token pour l'API (header X-Tars-Token ou cookie de session)
+  TARS_BOOT_NONCE  : Nonce de bootstrap one-time (URL /?boot=<nonce>)
   TARS_HOST        : Hôte (127.0.0.1 par défaut)
-  TARS_PORT        : Port (8000 par défaut)
+  TARS_PORT        : Port (8000 par défaut, 0 = port aléatoire)
   TARS_DATA        : Dossier des données (./data par défaut)
   ANTHROPIC_API_KEY: Clé API Anthropic
   MISTRAL_API_KEY : Clé API Mistral
   GROQ_API_KEY : Clé API Groq
   TARS_MODEL       : Modèle Anthropic (claude-haiku-4-5-20251001)
   MISTRAL_MODEL    : Modèle Mistral (mistral-tiny)
-GROQ_MODEL    : Modèle Groq (openai/gpt-oss-120b)
+  GROQ_MODEL    : Modèle Groq (openai/gpt-oss-120b)
   TARS_PROVIDERS   : Ordre des fournisseurs (groq,mistral,anthropic)
   TARS_MOCK        : Mode mock (1 = activé)
+
+Bootstrap : ouvrir http://localhost:<port>/?boot=<TARS_BOOT_NONCE> une seule fois.
+Le nonce est consommé et un cookie de session HttpOnly SameSite=Strict est posé.
 """
 
 import hmac
@@ -26,15 +30,18 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
+import socket
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 # ---------- Configuration ----------
 ROOT = Path(__file__).resolve().parent
@@ -56,10 +63,20 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "groq,mistral,anthropic").split(",") if p.strip()]
 
 # Sécurité
-TOKEN = os.environ.get("TARS_TOKEN", "")
+TOKEN = (os.environ.get("TARS_TOKEN") or "").strip() or secrets.token_urlsafe(32)
+BOOT_NONCE = (os.environ.get("TARS_BOOT_NONCE") or "").strip() or secrets.token_urlsafe(24)
+SESSION = secrets.token_urlsafe(32)
 HOST = os.environ.get("TARS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TARS_PORT", "8000"))
 MOCK = os.environ.get("TARS_MOCK") == "1"
+
+
+def get_token():
+    return TOKEN
+
+
+def get_boot_nonce():
+    return BOOT_NONCE
 
 # Limites
 MAX_BODY = 16 * 1024
@@ -586,25 +603,89 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
     server_version = "TARS"
 
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(20)
+
     def log_message(self, *a):
         pass
 
     def _auth(self):
-        if not TOKEN and HOST != "127.0.0.1":
+        if not TOKEN:
+            return False
+        got = self.headers.get("X-Tars-Token")
+        if got is not None and hmac.compare_digest(got.encode("utf-8"), TOKEN.encode("utf-8")):
             return True
-        got = self.headers.get("X-Tars-Token", "")
-        return hmac.compare_digest(got.encode("utf-8"), TOKEN.encode("utf-8"))
+        raw = self.headers.get("Cookie", "")
+        if not raw:
+            return False
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw)
+        except Exception:
+            return False
+        morsel = cookie.get("tars_session")
+        if morsel is None:
+            return False
+        return hmac.compare_digest(morsel.value.encode("utf-8"), SESSION.encode("utf-8"))
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _host_ok(self):
+        raw = (self.headers.get("Host") or "").strip()
+        if not raw:
+            return False
+        if raw.startswith("["):
+            end = raw.find("]")
+            if end < 0:
+                return False
+            host = raw[1:end].lower()
+            rest = raw[end + 1:]
+            if rest and not rest.startswith(":"):
+                return False
+        elif raw.count(":") == 1:
+            host = raw.split(":", 1)[0].lower()
+        else:
+            host = raw.lower()
+        allowed = {"127.0.0.1", "localhost", "::1"}
+        explicit = HOST.strip().lower()
+        if explicit and explicit not in ("0.0.0.0", "::"):
+            allowed.add(explicit)
+        return host in allowed
+
+    def _origin_ok(self):
+        raw = self.headers.get("Origin")
+        if raw is None:
+            return True
+        try:
+            parsed = urlparse(raw)
+            port = parsed.port
+        except ValueError:
+            return False
+        if parsed.scheme != "http":
+            return False
+        if (parsed.hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        return port == self.server.server_address[1]
+
+    def _guard(self, check_origin=False):
+        if not self._host_ok():
+            self._err(403, "accès refusé")
+            return False
+        if check_origin and not self._origin_ok():
+            self._err(403, "accès refusé")
+            return False
+        return True
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8", no_store=False, headers=None):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Tars-Token")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -623,7 +704,12 @@ class Handler(BaseHTTPRequestHandler):
             self._err(413, "corps trop gros")
             return None
         try:
-            data = json.loads(self.rfile.read(n))
+            raw = self.rfile.read(n)
+        except (socket.timeout, TimeoutError, OSError):
+            self._err(408, "délai dépassé")
+            return None
+        try:
+            data = json.loads(raw)
         except ValueError:
             self._err(400, "JSON invalide")
             return None
@@ -674,7 +760,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             save_secrets(updates)
         except OSError as e:
-            return self._err(500, f"écriture secrets.json impossible : {e}")
+            print(f"[CONFIG] écriture secrets.json impossible : {e}", file=sys.stderr)
+            return self._err(500, "configuration non enregistrée")
         out = {"status": "ok"}
         out.update(config_snapshot())
         self._send(200, json.dumps(out, ensure_ascii=False))
@@ -694,7 +781,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(400, "audio attendu")
         if n > MAX_AUDIO:
             return self._err(413, "audio trop gros (10 Mo max)")
-        audio = self.rfile.read(n)
+        try:
+            audio = self.rfile.read(n)
+        except (socket.timeout, TimeoutError, OSError):
+            return self._err(408, "délai dépassé")
         if len(audio) != n:
             return self._err(400, "audio incomplet")
 
@@ -720,47 +810,70 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(r.read())
         except urllib.error.HTTPError as e:
             msg = e.read().decode("utf-8", "replace")[:300]
-            return self._err(502, f"Groq STT {e.code}: {msg}")
+            print(f"[STT] Groq {e.code}: {msg}", file=sys.stderr)
+            return self._err(502, "transcription indisponible")
         except (urllib.error.URLError, OSError, ValueError) as e:
-            return self._err(502, f"Groq STT: {e}")
+            print(f"[STT] Groq: {e}", file=sys.stderr)
+            return self._err(502, "transcription indisponible")
         text = payload.get("text") if isinstance(payload, dict) else None
         if not isinstance(text, str):
-            return self._err(502, "réponse Groq invalide")
+            print("[STT] réponse Groq invalide", file=sys.stderr)
+            return self._err(502, "transcription indisponible")
         self._send(200, json.dumps({"text": text}, ensure_ascii=False))
 
     def do_OPTIONS(self):
+        if not self._guard():
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Tars-Token")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        if not self._guard():
+            return
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            if "boot" in query:
+                global BOOT_NONCE
+                boot = (query.get("boot") or [""])[0]
+                if BOOT_NONCE and boot and hmac.compare_digest(boot, BOOT_NONCE):
+                    BOOT_NONCE = ""
+                    self._send(
+                        302, b"", "text/plain; charset=utf-8", no_store=True,
+                        headers={
+                            "Location": "/",
+                            "Set-Cookie": f"tars_session={SESSION}; HttpOnly; SameSite=Strict; Path=/",
+                        })
+                    return
+                return self._err(403, "bootstrap invalide")
             try:
                 body = (ROOT / "index.html").read_bytes()
             except OSError:
                 return self._err(404, "index.html introuvable")
-            self._send(200, body, "text/html; charset=utf-8")
+            self._send(200, body, "text/html; charset=utf-8", no_store=True)
+        elif path == "/health":
+            self._send(200, json.dumps({"ok": True}), no_store=True)
         elif path == "/state":
             if not self._auth():
                 return self._err(401, "token")
-            self._send(200, json.dumps(load_settings()))
+            self._send(200, json.dumps(load_settings()), no_store=True)
         elif path == "/config":
             if not self._auth():
                 return self._err(401, "token")
-            self._send(200, json.dumps(config_snapshot()))
+            self._send(200, json.dumps(config_snapshot()), no_store=True)
         elif path == "/widget":
             # Endpoint public pour les widgets (statut et réglages uniquement)
-            self._send(200, json.dumps(widget_state()))
+            self._send(200, json.dumps(widget_state()), no_store=True)
         elif path.startswith("/static/"):
             self._serve_static(path)
         else:
             self._err(404, "introuvable")
 
     def do_POST(self):
+        if not self._guard(check_origin=True):
+            return
         path = urlparse(self.path).path
         if path not in ("/chat", "/status", "/config", "/stt"):
             return self._err(404, "introuvable")
@@ -799,11 +912,8 @@ class Handler(BaseHTTPRequestHandler):
         # Initialiser la réponse HTTP pour le streaming SSE
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Tars-Token")
         self.end_headers()
 
         reply, buf, first = "", "", True
@@ -827,16 +937,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._emit({"s": buf.strip()})
         except RuntimeError as e:
             rollback(gen, prev)
+            print(f"[CHAT] fournisseur indisponible : {e}", file=sys.stderr)
             try:
-                self._emit({"error": str(e), "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
+                self._emit({"error": "provider", "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
             except ConnectionError:
                 pass  # Client déjà déconnecté
             set_status("off")
             return
         except Exception as e:
             rollback(gen, prev)
+            print(f"[CHAT] erreur interne : {e!r}", file=sys.stderr)
             try:
-                self._emit({"error": f"Erreur interne : {e}", "s": "Erreur critique, commandant."})
+                self._emit({"error": "internal", "s": "Erreur critique, commandant."})
             except ConnectionError:
                 pass  # Client déjà déconnecté
             set_status("off")
@@ -868,6 +980,10 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client déconnecté, on arrête proprement
             raise ConnectionError("Client déconnecté") from None
+
+
+class TarsServer(ThreadingHTTPServer):
+    daemon_threads = True
 
 
 # ---------- Consolidation nocturne ----------
@@ -959,12 +1075,11 @@ if __name__ == "__main__":
         print("Définis GROQ_API_KEY (recommandé), MISTRAL_API_KEY ou ANTHROPIC_API_KEY (ou TARS_MOCK=1 pour tester sans clé).")
         print("Exemple : GROQ_API_KEY=ta_clé python3 Tars.py")
         sys.exit(1)
-    
-    if HOST != "127.0.0.1" and not TOKEN:
-        print("TARS_HOST ouvert au réseau : définis TARS_TOKEN.")
-        sys.exit(1)
-    
+
     load_fact_events()
     restore_history()
-    print(f"TARS en ligne -> http://{'localhost' if HOST == '127.0.0.1' else HOST}:{PORT}")
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    httpd = TarsServer((HOST, PORT), Handler)
+    real_port = httpd.server_address[1]
+    print(f"TARS_READY port={real_port}", flush=True)
+    print(f"TARS en ligne -> http://localhost:{real_port}/?boot={get_boot_nonce()}", flush=True)
+    httpd.serve_forever()
