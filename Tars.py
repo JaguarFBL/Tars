@@ -47,6 +47,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("TARS_DATA", ROOT / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
+try:
+    os.chmod(DATA, 0o700)
+except OSError:
+    pass
 STATIC = (ROOT / "static").resolve()
 JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "settings.json"
 SECRETS = DATA / "secrets.json"
@@ -140,6 +144,10 @@ def _atomic_write(path, text):
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(text, "utf-8")
         os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 # ---------- Secrets persistants ----------
@@ -247,6 +255,10 @@ def journal_add(kind, text):
     with LOCK:
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
+        try:
+            os.chmod(JOURNAL, 0o600)
+        except OSError:
+            pass
         if kind == "fact":
             _FACT_EVENTS.append((now, text))
 

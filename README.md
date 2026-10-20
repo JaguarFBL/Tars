@@ -10,7 +10,7 @@ Créer un assistant vocal **ultra-rapide** (< 1s de latence) avec la personnalit
 
 **Nouveautés** :
 - ✅ **100% local** : Plus besoin de Raspberry Pi, tout tourne sur l'appareil
-- ✅ **Applications natives** : Android (via Capacitor) et Windows (via Electron)
+- ✅ **Applications natives** : Android (Java natif + Chaquopy/WebView) et Windows (Electron)
 - ✅ **Widgets** : Widget Android natif + Widget Windows (Rainmeter)
 - ✅ **Fallback intégré** : Si le backend est down, bascule en mode local
 - ✅ **Clips audio** : Accusés de réception préenregistrés (optionnels)
@@ -34,10 +34,8 @@ Tars/
 │       ├── court/           # Accusés courts (Reçu, Mmh, etc.)
 │       ├── reflexion/       # Accusés de réflexion
 │       └── drole/           # Accusés drôles
-├── android/                 # Application Android
-│   ├── www/                # Frontend pour Android
-│   ├── app/                # Code natif Android
-│   ├── capacitor.config.json
+├── android/                 # Application Android native (Java + Chaquopy/WebView)
+│   ├── app/                 # Code natif Android et Python embarqué
 │   └── README.md
 └── windows/                 # Application Windows
     ├── main.js             # Point d'entrée Electron
@@ -47,13 +45,16 @@ Tars/
     └── README.md
 ```
 
+`data/` et `data/secrets.json` ne doivent jamais être commités. Le backend applique des permissions `700` sur `data/` et `600` sur les fichiers sensibles, en best-effort selon la plateforme.
+
 ---
 
 ## 🚀 Installation et Utilisation
 
 ### 1. Prérequis Communs
 - **Python 3.8+** (pour le backend)
-- **Node.js 18+** (pour les applications Android/Windows)
+- **Node.js 18+** (pour l'application Windows/Electron)
+- **Android Studio** (pour builder l'APK Android)
 
 ### 2. Backend (Tars.py)
 
@@ -97,7 +98,9 @@ source ~/.bashrc
 tars
 ```
 
-Le backend sera accessible à : **http://localhost:8000**
+Le serveur affiche son port au démarrage (`TARS_READY port=<port>`). En lancement manuel, le port par défaut est `8000` : ouvrir une seule fois l'URL de bootstrap affichée dans la console, `http://localhost:8000/?boot=<nonce>`.
+
+Si `TARS_TOKEN` n'est pas défini, un token est généré automatiquement. Il n'est pas affiché : pour authentifier des scripts, définir explicitement `TARS_TOKEN` et envoyer l'en-tête `X-Tars-Token`.
 
 #### Générer les clips audio
 ```bash
@@ -124,16 +127,21 @@ Voir : [windows/README.md](windows/README.md)
 ## 📱 Applications Natives
 
 ### Android
-- **Technologie** : Capacitor + WebView
-- **Backend** : Exécuté via Termux (ou Chaquopy pour une intégration complète)
-- **Widget** : Widget natif Android
-- **Installation** : Builder l'APK avec Android Studio
+- **Technologie** : Java natif + Chaquopy (Python embarqué) + WebView, sans Capacitor
+- **Backend** : intégré à l'APK via Chaquopy ; port aléatoire (`TARS_PORT=0`)
+- **Démarrage** : l'application attend que `/health` réponde avant d'ouvrir la WebView
+- **Widget** : widget natif Android
+- **Sécurité** : `allowBackup="false"`, trafic clair limité à la boucle locale (`127.0.0.1`, `localhost`), `data/` non versionné
+- **Installation** : builder l'APK avec Android Studio/Gradle
 
 ### Windows
 - **Technologie** : Electron
 - **Backend** : `Tars.exe` (généré avec PyInstaller)
+- **Port** : port libre choisi au démarrage
+- **Sécurité** : token et nonce passés par `TARS_TOKEN`/`TARS_BOOT_NONCE`, données dans `app.getPath('userData')/data` via `TARS_DATA`
+- **Build** : `npm run build-exe` (PyInstaller avec `--add-data "../index.html;." --add-data "../static;static"`)
 - **Widget** : Rainmeter (optionnel)
-- **Installation** : Builder l'installateur avec `npm run dist`
+- **Installation** : builder l'installateur avec `npm run dist`
 
 ---
 
@@ -146,7 +154,9 @@ Voir : [windows/README.md](windows/README.md)
 - **Réglages** : Humour et honnêteté persistants
 - **Endpoint `/widget`** : Pour les widgets (Android/Windows)
 - **Fallback** : Si les APIs échouent, bascule en mode mock
-- **Sécurité** : Protection contre path traversal, token obligatoire pour les endpoints sensibles
+- **Sécurité** : authentification fail-closed (cookie de session ou `X-Tars-Token`), `/health` public, contrôle du `Host` (loopback) et de l'`Origin` sur les POST, protection contre le path traversal, CORS supprimé
+- **Bootstrap** : `/?boot=<nonce>` répond `302`, pose un cookie `HttpOnly; SameSite=Strict` et consomme le nonce
+- **Token** : auto-généré si `TARS_TOKEN` est absent ; jamais dans l'URL ni dans `localStorage`
 
 ### Frontend (index.html)
 - **Interface minimaliste** : Bouton monolithe, affichage des messages
@@ -173,9 +183,10 @@ Voir : [windows/README.md](windows/README.md)
 | `TARS_MODEL` | Modèle Anthropic | `claude-haiku-4-5-20251001` | Non |
 | `GROQ_API_KEY` | Clé API Groq | - | Non |
 | `GROQ_MODEL` | Modèle Groq | `openai/gpt-oss-120b` | Non |
-| `TARS_TOKEN` | Token de sécurité | - | Non (uniquement si `HOST != 127.0.0.1`) |
+| `TARS_TOKEN` | Token API ; auto-généré s'il est absent, non affiché | auto | Non |
+| `TARS_BOOT_NONCE` | Nonce de bootstrap à usage unique (`/?boot=...`) | auto | Non |
 | `TARS_HOST` | Hôte du serveur | `127.0.0.1` | Non |
-| `TARS_PORT` | Port du serveur | `8000` | Non |
+| `TARS_PORT` | Port d'écoute ; `8000` en manuel, `0` = port aléatoire (Android/Electron) | `8000` | Non |
 | `TARS_MOCK` | Mode mock | `0` | Non |
 
 ### Exemple
@@ -186,6 +197,15 @@ TARS_MODEL=claude-3-sonnet-20240229 TARS_MOCK=1 python3 Tars.py
 # Démarrer avec une clé API Anthropic
 ANTHROPIC_API_KEY=sk-... python3 Tars.py
 ```
+
+### Sécurité et authentification
+
+- Si `TARS_TOKEN` est absent, un token est généré automatiquement et n'est pas affiché.
+- L'authentification est fail-closed : `/health` reste public, les endpoints sensibles exigent un cookie de session ou l'en-tête `X-Tars-Token` (scripts avec `TARS_TOKEN` explicite).
+- Bootstrap : ouvrir `http://localhost:<port>/?boot=<nonce>` une seule fois. Le serveur répond `302` et pose un cookie `HttpOnly; SameSite=Strict` ; le nonce est consommé.
+- Le token n'est jamais placé dans l'URL ni dans `localStorage`.
+- Le serveur vérifie le `Host` (loopback : `127.0.0.1`, `localhost`, `::1`) et, pour les POST, l'`Origin` local avec le bon port.
+- Aucun en-tête CORS n'est émis.
 
 ---
 
@@ -264,11 +284,13 @@ Vocal (TARS)
 ### Le backend ne démarre pas
 - Vérifiez que Python 3.8+ est installé
 - Exécutez `python3 Tars.py` manuellement pour voir les erreurs
-- Vérifiez que le port 8000 est libre
+- Le port réel est affiché au démarrage : `TARS_READY port=<port>`
+- En lancement manuel, gardez `TARS_PORT=8000` (ou `0` pour un port aléatoire) et vérifiez que ce port est libre
 
 ### Le frontend ne se connecte pas
-- Vérifiez que le backend est en cours d'exécution
-- Essayez d'ouvrir `http://localhost:8000` dans un navigateur
+- Vérifiez que le backend est en cours d'exécution et que `/health` répond
+- Ouvrez l'URL de bootstrap affichée dans la console : `http://localhost:<port>/?boot=<nonce>` (une seule fois)
+- En manuel, l'URL par défaut est `http://localhost:8000/?boot=<nonce>` ; Android et Electron choisissent un port aléatoire
 - Vérifiez la console du navigateur (F12)
 
 ### La reconnaissance vocale ne fonctionne pas
@@ -278,7 +300,7 @@ Vocal (TARS)
 
 ### Les clips audio ne se jouent pas
 - Vérifiez que les fichiers existent dans `static/acks/`
-- Vérifiez que le serveur les sert correctement (`http://localhost:8000/static/acks/court/recu.mp3`)
+- Vérifiez que le serveur les sert correctement (`http://localhost:<port>/static/acks/court/recu.mp3`)
 - Essayez de générer les clips avec `generate_acks.py`
 
 ---
