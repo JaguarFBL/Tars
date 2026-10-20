@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.ColorDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
@@ -33,12 +34,14 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
 
-    private static final String BASE_URL = "http://127.0.0.1:8000";
     private static final int MAX_WAIT_MS = 10_000;
     private static final int POLL_INTERVAL_MS = 200;
     private static final int REQ_RECORD_AUDIO = 1;
 
     private static volatile boolean serverStarted = false;
+    private static volatile int serverPort = 0;
+    private static volatile String bootNonce = "";
+    private static volatile boolean bootLoaded = false;
 
     private WebView webView;
     private TextToSpeech tts;
@@ -110,10 +113,12 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             startServer();
 
-            if (waitForServer(MAX_WAIT_MS)) {
+            if (serverPort > 0 && waitForServer(MAX_WAIT_MS)) {
+                final String url = baseUrl() + (bootLoaded ? "/" : "/?boot=" + Uri.encode(bootNonce));
+                bootLoaded = true;
                 runOnUiThread(() -> {
                     root.removeView(loading);
-                    webView.loadUrl(BASE_URL + "/");
+                    webView.loadUrl(url);
                 });
             } else {
                 runOnUiThread(() -> loading.setText("TARS n'a pas r\u00e9pondu. Relance l'application."));
@@ -122,7 +127,7 @@ public class MainActivity extends Activity {
     }
 
     private synchronized void startServer() {
-        if (serverStarted) {
+        if (serverStarted && serverPort > 0) {
             return;
         }
         try {
@@ -130,11 +135,16 @@ public class MainActivity extends Activity {
                 Python.start(new AndroidPlatform(getApplicationContext()));
             }
             PyObject tarsMain = Python.getInstance().getModule("tars_main");
-            new Thread(() -> tarsMain.callAttr("run")).start();
+            serverPort = tarsMain.callAttr("start").toInt();
+            bootNonce = tarsMain.callAttr("get_boot_nonce").toString();
             serverStarted = true;
         } catch (Exception e) {
             Log.e("TARS", "Echec du demarrage du serveur Python", e);
         }
+    }
+
+    private static String baseUrl() {
+        return "http://127.0.0.1:" + serverPort;
     }
 
     private void requestAudioPermission() {
@@ -292,7 +302,7 @@ public class MainActivity extends Activity {
         long deadline = System.currentTimeMillis() + maxWaitMs;
         while (System.currentTimeMillis() < deadline) {
             try {
-                HttpURLConnection conn = (HttpURLConnection) new URL(BASE_URL + "/state").openConnection();
+                HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl() + "/health").openConnection();
                 conn.setConnectTimeout(500);
                 conn.setReadTimeout(500);
                 int code = conn.getResponseCode();

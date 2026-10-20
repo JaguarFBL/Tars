@@ -647,7 +647,6 @@
 "use strict";
 const $ = s => document.querySelector(s);
 const BACKEND_URL = `http://localhost:${new URLSearchParams(window.location.search).get('port') || 8000}`;
-const TOKEN = new URLSearchParams(location.search).get('token') || localStorage.getItem('tars_token') || '';
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const NATIVE_TTS = !!(window.NativeTTS && typeof window.NativeTTS.speak === "function");
 // Dans l'APK, la WebView expose SpeechRecognition mais il ne fournit pas de résultat fiable :
@@ -678,8 +677,10 @@ if (isEmbedded) {
   document.body.classList.add('embedded');
 }
 
-// Base des appels API (même origine en web, backend local en embarqué)
-const apiBase = () => isEmbedded ? BACKEND_URL : window.location.origin;
+// Base des appels API (même origine en web et dans Electron, backend local sinon)
+const apiBase = () => (location.protocol === "http:" || location.protocol === "https:")
+  ? location.origin
+  : BACKEND_URL;
 
 // Activer le mode widget si demandé
 if (isWidget) {
@@ -750,7 +751,7 @@ function loadAudioClips() {
   };
   for (const [category, clips] of Object.entries(dummyClips)) {
     clips.forEach(clip => {
-      const audio = new Audio(`${BACKEND_URL}/static/acks/${category}/${clip}.mp3`);
+      const audio = new Audio(`${apiBase()}/static/acks/${category}/${clip}.mp3`);
       audio.preload = "auto";
       let triedWav = false;
       audio.onerror = () => {
@@ -1113,7 +1114,7 @@ async function transcribe(blob, type) {
     const r = await fetch(`${apiBase()}/stt`, {
       method: "POST",
       signal: c.signal,
-      headers: { "Content-Type": type, "X-Tars-Token": TOKEN },
+      headers: { "Content-Type": type },
       body: blob,
     });
     if (!session || c.signal.aborted || sttCtrl !== c || g0 !== gen) return;
@@ -1221,11 +1222,10 @@ async function send(text) {
   ctrl = new AbortController();
   
   try {
-    const backendUrl = isEmbedded ? BACKEND_URL : window.location.origin;
-    const r = await fetch(`${backendUrl}/chat`, {
+    const r = await fetch(`${apiBase()}/chat`, {
       method: "POST", 
       signal: ctrl.signal,
-      headers: { "Content-Type": "application/json", "X-Tars-Token": TOKEN },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
     if (!r.ok) {
@@ -1272,15 +1272,6 @@ async function startSession() {
     return; 
   }
   
-  if (isEmbedded && typeof window.electronAPI !== 'undefined') {
-    try {
-      await window.electronAPI.restartBackend();
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (e) {
-      console.error("Erreur backend:", e);
-    }
-  }
-  
   session = true; 
   setState("listening"); 
   if (USE_SR) listen();
@@ -1315,7 +1306,7 @@ document.addEventListener('keydown', (e) => {
 /* ---------- Initialisation ---------- */
 loadAudioClips();
 
-fetch((isEmbedded ? BACKEND_URL : window.location.origin) + "/state", { headers: { "X-Tars-Token": TOKEN } })
+fetch(apiBase() + "/state")
   .then(r => r.ok ? r.json() : null)
   .then(s => { 
     if (s) { 
@@ -1328,7 +1319,7 @@ fetch((isEmbedded ? BACKEND_URL : window.location.origin) + "/state", { headers:
 // Mettre à jour le widget régulièrement
 if (isWidget) {
   setInterval(() => {
-    fetch(`${BACKEND_URL}/widget`, { headers: { "X-Tars-Token": TOKEN } })
+    fetch(`${apiBase()}/widget`)
       .then(r => r.json())
       .then(data => {
         if (data.status) {
@@ -1343,7 +1334,7 @@ if (isWidget) {
 async function loadConfig() {
   const el = $("#groq-status");
   try {
-    const r = await fetch(`${apiBase()}/config`, { headers: { "X-Tars-Token": TOKEN } });
+    const r = await fetch(`${apiBase()}/config`);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const c = await r.json();
     if (c && typeof c.groq_model === "string" && c.groq_model) {
@@ -1368,7 +1359,7 @@ async function saveConfig(extra) {
   try {
     const r = await fetch(`${apiBase()}/config`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Tars-Token": TOKEN },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     const j = await r.json().catch(() => ({}));
