@@ -32,5 +32,13 @@ Thumbs.db
 
 # Environnement local
 .env
+
+# Build Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/legacy/
 .env.local
 .env.*.local
+lancer.ps1

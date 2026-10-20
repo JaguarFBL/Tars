@@ -8,7 +8,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "build-exe": "pyinstaller --onefile --windowed ../Tars.py",
-    "copy-exe": "cp ../dist/Tars.exe ."
+    "copy-exe": "copy dist\\Tars.exe ."
   },
   "dependencies": {
     "electron": "^28.0.0",

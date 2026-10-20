@@ -71,7 +71,10 @@ pip install piper-tts    # Pour Piper (local)
 
 #### Démarrer le backend
 ```bash
-# Avec votre clé Mistral (recommandé)
+# Avec votre clé Groq (recommandé)
+GROQ_API_KEY=votre_clé_ici python3 Tars.py
+
+# Avec votre clé Mistral
 MISTRAL_API_KEY=votre_clé_ici python3 Tars.py
 
 # Avec votre clé Anthropic
@@ -168,6 +171,8 @@ Voir : [windows/README.md](windows/README.md)
 | `TARS_DATA` | Dossier des données | `./data` | Non |
 | `ANTHROPIC_API_KEY` | Clé API Anthropic | - | Non (mode mock disponible) |
 | `TARS_MODEL` | Modèle Anthropic | `claude-haiku-4-5-20251001` | Non |
+| `GROQ_API_KEY` | Clé API Groq | - | Non |
+| `GROQ_MODEL` | Modèle Groq | `openai/gpt-oss-120b` | Non |
 | `TARS_TOKEN` | Token de sécurité | - | Non (uniquement si `HOST != 127.0.0.1`) |
 | `TARS_HOST` | Hôte du serveur | `127.0.0.1` | Non |
 | `TARS_PORT` | Port du serveur | `8000` | Non |

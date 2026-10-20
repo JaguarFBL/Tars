@@ -14,13 +14,20 @@ OU
 Utilisation :
   python3 generate_acks.py --method gtts    # Utilise gTTS (nécessite internet)
   python3 generate_acks.py --method piper   # Utilise Piper (local)
-  python3 generate_acks.py --method dummy   # Génère des fichiers silencieux (pour test)
+  python3 generate_acks.py --method dummy   # Génère des fichiers WAV silencieux (pour test)
 """
 
 import os
 import sys
 import argparse
+import unicodedata
+import re
+import wave
 from pathlib import Path
+
+def slug(text):
+    t = unicodedata.normalize('NFKD', text.lower()).encode('ascii', 'ignore').decode()
+    return re.sub(r'[^a-z0-9]+', '_', t).strip('_')
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static" / "acks"
@@ -51,18 +58,21 @@ ACK_TEXT = {
 }
 
 def generate_dummy_clips():
-    """Génère des fichiers MP3 silencieux (pour test)"""
+    """Génère des fichiers WAV silencieux valides (pour test)"""
     print("Génération de clips audio dummy (silencieux)...")
+    framerate = 16000
+    duration = 0.2
+    silence = bytes(int(framerate * 2 * duration))
     for category, texts in ACK_TEXT.items():
         cat_dir = STATIC_DIR / category
         cat_dir.mkdir(parents=True, exist_ok=True)
         for i, text in enumerate(texts):
-            # Créer un fichier MP3 silencieux (juste pour la structure)
-            filename = cat_dir / f"{text.lower().replace(' ', '_').replace('.', '').replace("'", '')}.mp3"
-            # Écrire un fichier vide (ou un fichier WAV silencieux minimal)
-            with open(filename, "wb") as f:
-                # En-tête WAV minimal silencieux (44 octets)
-                f.write(b'RIFF\x24\x08\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x02\x00\x44\xac\x00\x00\x10\xb1\x02\x00\x04\x00\x00\x00data\x00\x00\x00\x00')
+            filename = cat_dir / f"{slug(text)}.wav"
+            with wave.open(str(filename), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(framerate)
+                wav.writeframes(silence)
             print(f"  Créé: {filename}")
     print("Clips dummy générés avec succès !")
 
@@ -85,7 +95,7 @@ def generate_with_gtts():
         cat_dir = STATIC_DIR / category
         cat_dir.mkdir(parents=True, exist_ok=True)
         for text in texts:
-            filename = cat_dir / f"{text.lower().replace(' ', '_').replace('.', '').replace("'", '')}.mp3"
+            filename = cat_dir / f"{slug(text)}.mp3"
             try:
                 # Générer avec gTTS (voix française)
                 tts = gTTS(text=text, lang='fr', slow=False)
@@ -134,7 +144,7 @@ def generate_with_piper():
         cat_dir = STATIC_DIR / category
         cat_dir.mkdir(parents=True, exist_ok=True)
         for text in texts:
-            filename = cat_dir / f"{text.lower().replace(' ', '_').replace('.', '').replace("'", '')}.wav"
+            filename = cat_dir / f"{slug(text)}.wav"
             try:
                 # Générer avec Piper
                 speaker.synthesize(text, str(filename))

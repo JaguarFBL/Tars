@@ -13,9 +13,11 @@ Variables d'environnement :
   TARS_DATA        : Dossier des données (./data par défaut)
   ANTHROPIC_API_KEY: Clé API Anthropic
   MISTRAL_API_KEY : Clé API Mistral
+  GROQ_API_KEY : Clé API Groq
   TARS_MODEL       : Modèle Anthropic (claude-haiku-4-5-20251001)
   MISTRAL_MODEL    : Modèle Mistral (mistral-tiny)
-  TARS_PROVIDERS   : Ordre des fournisseurs (mistral,anthropic)
+GROQ_MODEL    : Modèle Groq (openai/gpt-oss-120b)
+  TARS_PROVIDERS   : Ordre des fournisseurs (groq,mistral,anthropic)
   TARS_MOCK        : Mode mock (1 = activé)
 """
 
@@ -40,15 +42,18 @@ DATA = Path(os.environ.get("TARS_DATA", ROOT / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
 STATIC = (ROOT / "static").resolve()
 JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "settings.json"
+SECRETS = DATA / "secrets.json"
 MARK = DATA / "consolidated_until.txt"
 FACTS_BAK = DATA / "facts.md.bak"
 
 # Clés API
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")
 MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "open-mistral-7b")
-PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "mistral,anthropic").split(",") if p.strip()]
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "groq,mistral,anthropic").split(",") if p.strip()]
 
 # Sécurité
 TOKEN = os.environ.get("TARS_TOKEN", "")
@@ -58,10 +63,29 @@ MOCK = os.environ.get("TARS_MOCK") == "1"
 
 # Limites
 MAX_BODY = 16 * 1024
+MAX_AUDIO = 10 * 1024 * 1024
 MAX_TEXT = 4000
 STATE_TTL = 120
 DOWN_FOR = 300
-CONSOLIDATE_CHUNK = 12000
+CONSOLIDATE_CHUNK = 8000
+
+# STT Groq
+STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+STT_MODEL = "whisper-large-v3-turbo"
+_AUDIO_TYPES = {
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/mp4": "mp4",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/mpeg": "mp3",
+}
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tars/1.0"
+
+mimetypes.add_type("audio/mpeg", ".mp3")
+mimetypes.add_type("audio/wav", ".wav")
+mimetypes.add_type("image/svg+xml", ".svg")
 
 # ---------- État partagé ----------
 STATUSES = ("off", "listening", "thinking", "speaking")
@@ -101,6 +125,58 @@ def _atomic_write(path, text):
         os.replace(tmp, path)
 
 
+# ---------- Secrets persistants ----------
+_SECRET_FIELDS = ("groq_api_key", "mistral_api_key", "anthropic_api_key", "groq_model")
+
+
+def load_secrets():
+    """Charge secrets.json en écrasant les globals, sauf si l'env est défini (priorité)."""
+    global GROQ_API_KEY, MISTRAL_API_KEY, API_KEY, GROQ_MODEL
+    try:
+        d = json.loads(SECRETS.read_text("utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(d, dict):
+        return
+    if not os.environ.get("GROQ_API_KEY") and isinstance(d.get("groq_api_key"), str):
+        GROQ_API_KEY = d["groq_api_key"].strip()
+    if not os.environ.get("MISTRAL_API_KEY") and isinstance(d.get("mistral_api_key"), str):
+        MISTRAL_API_KEY = d["mistral_api_key"].strip()
+    if not os.environ.get("ANTHROPIC_API_KEY") and isinstance(d.get("anthropic_api_key"), str):
+        API_KEY = d["anthropic_api_key"].strip()
+    if not os.environ.get("GROQ_MODEL") and isinstance(d.get("groq_model"), str) and d["groq_model"].strip():
+        GROQ_MODEL = d["groq_model"].strip()
+
+
+def save_secrets(d):
+    """Fusionne les champs connus dans secrets.json (écriture atomique)."""
+    current = {}
+    try:
+        old = json.loads(SECRETS.read_text("utf-8"))
+        if isinstance(old, dict):
+            current = {k: v for k, v in old.items() if k in _SECRET_FIELDS}
+    except (OSError, ValueError):
+        pass
+    for k in _SECRET_FIELDS:
+        if k in d:
+            current[k] = d[k]
+    _atomic_write(SECRETS, json.dumps(current, ensure_ascii=False, indent=2) + "\n")
+
+
+def config_snapshot():
+    return {
+        "has_groq": bool(GROQ_API_KEY),
+        "has_mistral": bool(MISTRAL_API_KEY),
+        "has_anthropic": bool(API_KEY),
+        "groq_model": GROQ_MODEL,
+    }
+
+
+# Au chargement : les secrets du fichier complètent l'environnement.
+# (indispensable pour le lanceur Android qui importe Tars sans passer par __main__)
+load_secrets()
+
+
 # ---------- Réglages persistants ----------
 
 def load_settings():
@@ -124,10 +200,13 @@ def save_settings(s):
     _atomic_write(SETTINGS, json.dumps(s))
 
 
-_SET_RE = re.compile(r"(humour|honn[e\u00ea]tet[e\u00e9])\s*(?:\u00e0|a|:|=|de|sur)?\s*(\d{1,3})", re.I)
+_SET_RE = re.compile(r"(humour|honn[e\u00ea]te(?:t[e\u00e9])?)\s*(?:\u00e0|a|:|=|de|sur)?\s*(\d{1,3})", re.I)
+_SET_INTENT_RE = re.compile(r"tars|regle|r\u00e8gle|mets?|passe|change|remet", re.I)
 
 
 def parse_settings(text):
+    if not _SET_INTENT_RE.search(text):
+        return {}
     out = {}
     for name, val in _SET_RE.findall(text):
         key = "humour" if name.lower().startswith("humour") else "honnetete"
@@ -333,7 +412,8 @@ def _stream_anthropic(system, messages, max_tokens=400):
                        "messages": messages, "stream": True}).encode()
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages", data=body, method="POST",
-        headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+        headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json",
+                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tars/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             for raw in r:
@@ -368,7 +448,8 @@ def _stream_mistral(system, messages, max_tokens=400):
     }).encode()
     req = urllib.request.Request(
         "https://api.mistral.ai/v1/chat/completions", data=body, method="POST",
-        headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"})
+        headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json",
+                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tars/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             for raw in r:
@@ -395,16 +476,57 @@ def _stream_mistral(system, messages, max_tokens=400):
         raise RuntimeError(f"Mistral: {e}") from None
 
 
-_STREAMS = {"mistral": _stream_mistral, "anthropic": _stream_anthropic}
+def _stream_groq(system, messages, max_tokens=400):
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY manquante")
+    body = json.dumps({
+        "model": GROQ_MODEL,
+        "messages": [{"role": "system", "content": system}] + messages,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/chat/completions", data=body, method="POST",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json",
+                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Tars/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            for raw in r:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    ev = json.loads(payload)
+                except ValueError:
+                    continue
+                choices = ev.get("choices") or []
+                delta = (choices[0].get("delta") or {}) if choices else {}
+                content = delta.get("content")
+                if isinstance(content, list):
+                    content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+                if content:
+                    yield content
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Groq {e.code}: {e.read().decode('utf-8', 'replace')[:200]}") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise RuntimeError(f"Groq: {e}") from None
+
+
+_STREAMS = {"groq": _stream_groq, "mistral": _stream_mistral, "anthropic": _stream_anthropic}
 _DOWN = {}
 
 
 def _has_key(name):
+    if name == "groq":
+        return bool(GROQ_API_KEY)
     return bool(MISTRAL_API_KEY) if name == "mistral" else bool(API_KEY) if name == "anthropic" else False
 
 
 def stream_llm(system, messages, max_tokens=400, providers=None):
-    if MOCK:
+    if MOCK and not any([GROQ_API_KEY, MISTRAL_API_KEY, API_KEY]):
         yield from mock_llm(messages)
         return
     names = [p for p in (providers or PROVIDERS) if p in _STREAMS and _has_key(p)]
@@ -480,6 +602,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Tars-Token")
         self.end_headers()
         self.wfile.write(data)
 
@@ -524,6 +649,93 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), ctype)
 
+    def _handle_config_post(self, data):
+        global GROQ_API_KEY, MISTRAL_API_KEY, API_KEY, GROQ_MODEL
+        updates = {}
+        for key in _SECRET_FIELDS:
+            if key not in data:
+                continue
+            val = data[key]
+            if not isinstance(val, str):
+                return self._err(400, f"{key} doit être une chaîne")
+            updates[key] = val.strip()
+        # Un modèle vide ne doit pas casser le provider : on l'ignore.
+        if not updates.get("groq_model", "x"):
+            updates.pop("groq_model", None)
+        for key, val in updates.items():
+            if key == "groq_api_key":
+                GROQ_API_KEY = val
+            elif key == "mistral_api_key":
+                MISTRAL_API_KEY = val
+            elif key == "anthropic_api_key":
+                API_KEY = val
+            elif key == "groq_model":
+                GROQ_MODEL = val
+        try:
+            save_secrets(updates)
+        except OSError as e:
+            return self._err(500, f"écriture secrets.json impossible : {e}")
+        out = {"status": "ok"}
+        out.update(config_snapshot())
+        self._send(200, json.dumps(out, ensure_ascii=False))
+
+    def _handle_stt(self):
+        if not GROQ_API_KEY:
+            return self._err(503, "clé Groq requise pour la transcription")
+        raw_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        ext = _AUDIO_TYPES.get(raw_type)
+        if not ext:
+            return self._err(415, "format audio non supporté")
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            n = -1
+        if n <= 0:
+            return self._err(400, "audio attendu")
+        if n > MAX_AUDIO:
+            return self._err(413, "audio trop gros (10 Mo max)")
+        audio = self.rfile.read(n)
+        if len(audio) != n:
+            return self._err(400, "audio incomplet")
+
+        boundary = "----TarsBoundary" + os.urandom(12).hex()
+        head = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="audio.{ext}"\r\n'
+            f"Content-Type: {raw_type}\r\n\r\n"
+        ).encode("ascii")
+        tail = (
+            f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{STT_MODEL}"
+            f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\nfr"
+            f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson"
+            f"\r\n--{boundary}--\r\n"
+        ).encode("ascii")
+        req = urllib.request.Request(
+            STT_URL, data=head + audio + tail, method="POST",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": f"multipart/form-data; boundary={boundary}",
+                     "User-Agent": _UA})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                payload = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode("utf-8", "replace")[:300]
+            return self._err(502, f"Groq STT {e.code}: {msg}")
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            return self._err(502, f"Groq STT: {e}")
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str):
+            return self._err(502, "réponse Groq invalide")
+        self._send(200, json.dumps({"text": text}, ensure_ascii=False))
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Tars-Token")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/":
@@ -536,6 +748,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth():
                 return self._err(401, "token")
             self._send(200, json.dumps(load_settings()))
+        elif path == "/config":
+            if not self._auth():
+                return self._err(401, "token")
+            self._send(200, json.dumps(config_snapshot()))
         elif path == "/widget":
             # Endpoint public pour les widgets (statut et réglages uniquement)
             self._send(200, json.dumps(widget_state()))
@@ -546,13 +762,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ("/chat", "/status"):
+        if path not in ("/chat", "/status", "/config", "/stt"):
             return self._err(404, "introuvable")
         if not self._auth():
             return self._err(401, "token")
+        if path == "/stt":
+            return self._handle_stt()
         data = self._read_json()
         if data is None:
             return
+
+        if path == "/config":
+            return self._handle_config_post(data)
 
         if path == "/status":
             st = data.get("status")
@@ -563,7 +784,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Gestion de /chat
-        text = (data.get("text") or "").strip()
+        text = data.get("text")
+        if not isinstance(text, str):
+            return self._err(400, "texte invalide")
+        text = text.strip()
         if not text:
             return self._err(400, "texte vide")
         if len(text) > MAX_TEXT:
@@ -607,6 +831,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._emit({"error": str(e), "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
             except ConnectionError:
                 pass  # Client déjà déconnecté
+            set_status("off")
             return
         except Exception as e:
             rollback(gen, prev)
@@ -614,9 +839,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._emit({"error": f"Erreur interne : {e}", "s": "Erreur critique, commandant."})
             except ConnectionError:
                 pass  # Client déjà déconnecté
+            set_status("off")
             return
 
         if not finish_turn(gen, reply):
+            with HIST_LOCK:
+                if HISTORY and HISTORY[-1]["role"] == "user" and HISTORY[-1]["content"] == text:
+                    HISTORY.pop()
             return  # un tour plus récent a pris la main
 
         set_status("off")
@@ -645,7 +874,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def consolidate():
     since = read_mark()
-    ev = [e for e in journal_read() if e["t"] > since and e["kind"] == "fact"]
+    ev = [e for e in journal_read() if e["t"] > since and e["kind"] in ("fact", "user", "tars")]
     if not ev:
         print("Rien de nouveau dans le journal.")
         return
@@ -656,9 +885,22 @@ def consolidate():
     
     # Préparer le log des nouveaux faits
     log = "\n".join(f"[{e['kind']}] {e['text']}" for e in ev)
+    ev_facts = [e for e in ev if e["kind"] == "fact"]
+    new_facts = "\n".join(f"- {e['text']}" for e in ev_facts)
     
-    # Si on a Mistral ou Anthropic, utiliser l'API pour consolider
-    if MISTRAL_API_KEY:
+    # Si on a Groq, Mistral ou Anthropic, utiliser l'API pour consolider
+    if GROQ_API_KEY:
+        try:
+            prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
+                     "Réécris la liste complète : un fait court par ligne commençant par '- ', uniquement des faits "
+                     "durables et explicitement dits par le commandant, sans doublon, sans rien inventer. "
+                     "Les lignes [fact] sont à retenir en priorité. Réponds uniquement par la liste.\n\n"
+                     f"FAITS ACTUELS:\n{old}\n\nJOURNAL:\n{log}")
+            out = "".join(_stream_groq("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
+        except Exception as e:
+            print(f"[CONSOLIDATE] Groq échoué: {e}. Passage en mode manuel.")
+            out = old + ("\n" + new_facts if old.strip() else new_facts)
+    elif MISTRAL_API_KEY:
         try:
             prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
                      "Réécris la liste complète : un fait court par ligne commençant par '- ', uniquement des faits "
@@ -668,7 +910,6 @@ def consolidate():
             out = "".join(_stream_mistral("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Mistral échoué: {e}. Passage en mode manuel.")
-            new_facts = "\n".join(f"- {e['text']}" for e in ev)
             out = old + ("\n" + new_facts if old.strip() else new_facts)
     elif API_KEY:
         try:
@@ -680,12 +921,19 @@ def consolidate():
             out = "".join(_stream_anthropic("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Anthropic échoué: {e}. Passage en mode manuel.")
-            new_facts = "\n".join(f"- {e['text']}" for e in ev)
             out = old + ("\n" + new_facts if old.strip() else new_facts)
     else:
-        # Mode manuel : ajouter les nouveaux faits à l'ancien
-        new_facts = "\n".join(f"- {e['text']}" for e in ev)
-        out = old + ("\n" + new_facts if old else new_facts)
+        # Mode manuel : ajouter les nouveaux faits à l'ancien, sans doublon
+        if not ev_facts:
+            print("Rien de nouveau à consolider en mode manuel.")
+            return
+        lignes, vus = [], set()
+        for ligne in old.splitlines() + [f"- {e['text']}" for e in ev_facts]:
+            cle = ligne.strip().lower()
+            if cle and cle not in vus:
+                vus.add(cle)
+                lignes.append(ligne)
+        out = "\n".join(lignes)
     
     if not out.startswith("-"):
         print("Réponse inattendue du modèle, facts.md non modifié.")
@@ -696,24 +944,27 @@ def consolidate():
         shutil.copy2(FACTS, FACTS_BAK)
     
     _atomic_write(FACTS, out + "\n")
-    MARK.write_text(str(max(e["t"] for e in ev)))
+    MARK.write_text(str(max(e["t"] for e in ev)), encoding="utf-8")
     print(f"{len(ev)} événements consolidés -> {FACTS}")
 
 
 if __name__ == "__main__":
+    load_secrets()
+
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         consolidate()
         sys.exit(0)
     
-    if not MOCK and not any([MISTRAL_API_KEY, API_KEY]):
-        print("Définis ANTHROPIC_API_KEY ou MISTRAL_API_KEY (ou TARS_MOCK=1 pour tester sans clé).")
-        print("Exemple : MISTRAL_API_KEY=ta_clé python3 Tars.py")
+    if not MOCK and not any([GROQ_API_KEY, MISTRAL_API_KEY, API_KEY]):
+        print("Définis GROQ_API_KEY (recommandé), MISTRAL_API_KEY ou ANTHROPIC_API_KEY (ou TARS_MOCK=1 pour tester sans clé).")
+        print("Exemple : GROQ_API_KEY=ta_clé python3 Tars.py")
         sys.exit(1)
     
     if HOST != "127.0.0.1" and not TOKEN:
         print("TARS_HOST ouvert au réseau : définis TARS_TOKEN.")
         sys.exit(1)
     
+    load_fact_events()
     restore_history()
     print(f"TARS en ligne -> http://{'localhost' if HOST == '127.0.0.1' else HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
