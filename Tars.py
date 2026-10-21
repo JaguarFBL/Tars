@@ -204,6 +204,10 @@ load_secrets()
 
 # ---------- Réglages persistants ----------
 
+DESIGNS = ("monolithe", "cyanotype", "editorial")
+DEFAULT_DESIGN = "monolithe"
+
+
 def load_settings():
     try:
         s = json.loads(SETTINGS.read_text("utf-8"))
@@ -217,12 +221,32 @@ def load_settings():
             return max(0, min(100, int(s.get(key, default))))
         except (TypeError, ValueError):
             return default
-    
-    return {"humour": pct("humour", 60), "honnetete": pct("honnetete", 90)}
+
+    design = s.get("design")
+    if design not in DESIGNS:
+        design = DEFAULT_DESIGN
+
+    return {"humour": pct("humour", 60), "honnetete": pct("honnetete", 90), "design": design}
 
 
 def save_settings(s):
     _atomic_write(SETTINGS, json.dumps(s))
+
+
+_HTML_FR_RE = re.compile(r'<html\b[^>]*\blang=(["\'])fr\1[^>]*>', re.I)
+_DATA_DESIGN_RE = re.compile(r'\s+data-design=(["\']).*?\1', re.I)
+
+
+def inject_design(html, design):
+    """Injecte data-design dans la première balise <html lang="fr"> (whitelist stricte)."""
+    if design not in DESIGNS:
+        design = DEFAULT_DESIGN
+    match = _HTML_FR_RE.search(html)
+    if not match:
+        return html
+    tag = _DATA_DESIGN_RE.sub("", match.group(0))
+    new_tag = tag[:-1] + f' data-design="{design}">'
+    return html[:match.start()] + new_tag + html[match.end():]
 
 
 _SET_RE = re.compile(r"(humour|honn[e\u00ea]te(?:t[e\u00e9])?)\s*(?:\u00e0|a|:|=|de|sur)?\s*(\d{1,3})", re.I)
@@ -778,6 +802,19 @@ class Handler(BaseHTTPRequestHandler):
         out.update(config_snapshot())
         self._send(200, json.dumps(out, ensure_ascii=False))
 
+    def _handle_design_post(self, data):
+        design = data.get("design")
+        if not isinstance(design, str) or design not in DESIGNS:
+            return self._err(400, "design invalide")
+        settings = load_settings()
+        settings["design"] = design
+        try:
+            save_settings(settings)
+        except OSError as e:
+            print(f"[DESIGN] écriture settings.json impossible : {e}", file=sys.stderr)
+            return self._err(500, "design non enregistré")
+        self._send(200, json.dumps({"design": design}))
+
     def _handle_stt(self):
         if not GROQ_API_KEY:
             return self._err(503, "clé Groq requise pour la transcription")
@@ -861,9 +898,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 return self._err(403, "bootstrap invalide")
             try:
-                body = (ROOT / "index.html").read_bytes()
-            except OSError:
+                html = (ROOT / "index.html").read_text("utf-8")
+            except (OSError, UnicodeDecodeError):
                 return self._err(404, "index.html introuvable")
+            body = inject_design(html, load_settings()["design"])
             self._send(200, body, "text/html; charset=utf-8", no_store=True)
         elif path == "/health":
             self._send(200, json.dumps({"ok": True}), no_store=True)
@@ -887,7 +925,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard(check_origin=True):
             return
         path = urlparse(self.path).path
-        if path not in ("/chat", "/status", "/config", "/stt"):
+        if path not in ("/chat", "/status", "/config", "/stt", "/design"):
             return self._err(404, "introuvable")
         if not self._auth():
             return self._err(401, "token")
@@ -899,6 +937,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/config":
             return self._handle_config_post(data)
+
+        if path == "/design":
+            return self._handle_design_post(data)
 
         if path == "/status":
             st = data.get("status")
