@@ -69,8 +69,8 @@ body[data-state="recording"] .state-dot { background: var(--err); box-shadow: 0 
 #status.err { color: var(--err); }
 
 /* ---------- Scène : le slab + la réponse ---------- */
-#slab { grid-area: slab; justify-self: center; display: flex; gap: 10px; align-items: flex-end; height: 200px; padding: 0 4px 14px; position: relative; flex: none; }
-#slab i { display: block; width: 50px; height: 100%; transition: transform .45s var(--ease), height .45s var(--ease); }
+#slab { grid-area: slab; justify-self: center; display: flex; gap: 8px; align-items: flex-end; height: 150px; padding: 0 4px 12px; position: relative; flex: none; }
+#slab i { display: block; width: 40px; height: 100%; transition: transform .45s var(--ease), height .45s var(--ease); }
 #slab::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; background: var(--line-2); transition: background .2s; }
 body[data-state="listening"] #slab::after, body[data-state="speaking"] #slab::after { background: var(--accent); }
 body[data-state="recording"] #slab::after { background: var(--err); animation: blink .8s steps(2) infinite; }
@@ -102,7 +102,7 @@ body[data-state="speaking"] #slab i:nth-child(2) { animation-delay: .15s; } body
 /* ---------- Jauges, saisie ---------- */
 .gauges { grid-area: gauges; display: grid; gap: 8px; }
 .gauge-row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 12px; font: 500 13px var(--f-body); color: var(--soft); }
-.bar { display: flex; gap: 3px; height: 8px; }
+.bar { display: flex; gap: 4px; height: 6px; }
 .bar b { flex: 1; background: var(--line); } .bar b.on { background: var(--ink-2); }
 #g-honnetete b.on { background: var(--accent); }
 .values-line { grid-area: values; font: 500 12px var(--f-body); color: var(--soft); display: none; }
@@ -144,9 +144,9 @@ html[data-design="editorial"] .values-line { display: block; }
    1 · MONOLITHE — alu mat, quatre dalles, pas de cartes
    ========================================================== */
 html[data-design="monolithe"] .top h1 { font-size: 32px; }
-html[data-design="monolithe"] #slab i { border-radius: 3px; box-shadow: inset 0 0 0 1px #8C9196, 0 14px 22px -16px rgba(20,23,26,.55); background: linear-gradient(90deg,#B0B4B9,#E4E6E8 42%,#A7ABB0 100%); }
+html[data-design="monolithe"] #slab i { border-radius: 2px; box-shadow: inset 0 0 0 1px #9A9EA2, 0 8px 14px -12px rgba(20,23,26,.38); background: linear-gradient(90deg,#B8BCBF,#DEE0E2 45%,#AFB3B6 100%); }
 html[data-design="monolithe"] #slab i:nth-child(even) { height: 90%; }
-html[data-design="monolithe"] .reply { border-left: 3px solid #3A3F45; padding-left: 16px; }
+html[data-design="monolithe"] .reply { border-left: 2px solid #3A3F45; padding-left: 14px; }
 html[data-design="monolithe"] { --w-anim: wSlab; }
 @keyframes wSlab { 0% { clip-path: inset(0 100% 0 0); transform: translateX(-10px); } 100% { clip-path: inset(0 0 0 0); transform: none; } }
 html[data-design="monolithe"] .wi { animation-timing-function: steps(4, end); }
@@ -155,14 +155,14 @@ html[data-design="monolithe"] .send { background: #3A3F45; color: #fff; }
 /* ==========================================================
    2 · CYANOTYPE — plan de mission, trait fin, cotes
    ========================================================== */
-html[data-design="cyanotype"] body { background-image: linear-gradient(rgba(234,241,251,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(234,241,251,.07) 1px, transparent 1px); background-size: 22px 22px; }
-html[data-design="cyanotype"] main { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+html[data-design="cyanotype"] body { background-image: linear-gradient(rgba(234,241,251,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(234,241,251,.05) 1px, transparent 1px); background-size: 36px 36px; }
+html[data-design="cyanotype"] main { border-left: 1px solid rgba(234,241,251,.18); border-right: 1px solid rgba(234,241,251,.18); }
 html[data-design="cyanotype"] .top h1 { font-weight: 800; }
 html[data-design="cyanotype"] .linkline::before { content: "rév. B ·"; }
-html[data-design="cyanotype"] #slab { padding-bottom: 30px; }
-html[data-design="cyanotype"] #slab i { box-sizing: border-box; border: 1.5px solid #EAF1FB; background: repeating-linear-gradient(135deg, rgba(234,241,251,.14) 0 1px, transparent 1px 7px); width: 46px; }
+html[data-design="cyanotype"] #slab { padding-bottom: 24px; }
+html[data-design="cyanotype"] #slab i { box-sizing: border-box; border: 1px solid #EAF1FB; background: repeating-linear-gradient(135deg, rgba(234,241,251,.07) 0 1px, transparent 1px 12px); width: 36px; }
 html[data-design="cyanotype"] #slab i:nth-child(even) { border-color: #FF6B2C; height: 94%; }
-html[data-design="cyanotype"] #slab::before { content: "190 mm"; position: absolute; left: 4px; right: 4px; bottom: 6px; padding-top: 3px; border-top: 1px solid #FF6B2C; text-align: right; font: 400 12px var(--f-body); color: #FF6B2C; }
+html[data-design="cyanotype"] #slab::before { content: "190 mm"; position: absolute; left: 12%; right: 12%; bottom: 5px; padding-top: 3px; border-top: 1px solid #FF6B2C; text-align: right; font: 400 12px var(--f-body); color: #FF6B2C; }
 html[data-design="cyanotype"] #slab::after { display: none; }
 html[data-design="cyanotype"] .reply { padding-left: 14px; border-left: 1px solid var(--line-2); position: relative; }
 html[data-design="cyanotype"] .reply::before, html[data-design="cyanotype"] .reply::after { content: ""; position: absolute; left: -4px; width: 7px; height: 1px; background: #FF6B2C; } html[data-design="cyanotype"] .reply::before { top: 0; } html[data-design="cyanotype"] .reply::after { bottom: 0; }
@@ -198,6 +198,12 @@ html[data-design="editorial"] #txt { border-bottom-color: var(--ink-2); }
 html[data-design="editorial"] .send { background: transparent; color: var(--accent); padding: 0 4px; font-family: var(--f-body); }
 html[data-design="editorial"] .gauges { display: none; }
 
+/* ---------- État vide : pas de fausse barre de réponse ---------- */
+.reply:has(#you:empty):has(#tars:empty) { border-left-width: 0; padding-left: 0; }
+.reply:has(#you:empty):has(#tars:empty) #you { display: none; }
+html[data-design="cyanotype"] .reply:has(#you:empty):has(#tars:empty)::before,
+html[data-design="cyanotype"] .reply:has(#you:empty):has(#tars:empty)::after { display: none; }
+
 /* ---------- Mode widget (200×120) et embarqué ---------- */
 body.widget-mode { width: 200px; height: 120px; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 body.widget-mode main { padding: 8px; gap: 4px; min-height: 0; grid-template-areas: "status" "slab"; grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
@@ -211,7 +217,7 @@ body.embedded main { padding: 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; animation-delay: 0s !important; }
 }
-@media (max-height: 640px) { #slab { height: 120px; } .reply { min-height: 100px; } }
+@media (max-height: 640px) { #slab { height: 100px; } .reply { min-height: 100px; } }
 </style>
 </head>
 <body data-state="off">
@@ -354,9 +360,9 @@ function note(msg, err) {
 
 function renderGauges() {
   for (const k of ["humour", "honnetete"]) {
-    const n = Math.round(settings[k] / 10), el = $("#g-" + k);
+    const n = Math.round(settings[k] / 100 * 6), el = $("#g-" + k);
     el.setAttribute("title", settings[k] + " %");
-    el.innerHTML = Array.from({ length: 10 }, (_, i) => `<b class="${i < n ? "on" : ""}"></b>`).join("");
+    el.innerHTML = Array.from({ length: 6 }, (_, i) => `<b class="${i < n ? "on" : ""}"></b>`).join("");
   }
   const values = $("#values");
   if (values) values.textContent = `Humour ${settings.humour} · Honnêteté ${settings.honnetete}`;
