@@ -285,6 +285,22 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void setVoice(float pitch, float rate) {
+            final float p = Math.max(0.1f, Math.min(2.0f, pitch));
+            final float r = Math.max(0.5f, Math.min(2.0f, rate));
+            runOnUiThread(() -> {
+                final TextToSpeech engine;
+                synchronized (MainActivity.this) {
+                    engine = tts;
+                }
+                if (engine != null) {
+                    engine.setPitch(p);
+                    engine.setSpeechRate(r);
+                }
+            });
+        }
+
+        @JavascriptInterface
         public void stop() {
             runOnUiThread(() -> {
                 final TextToSpeech engine;

@@ -327,3 +327,23 @@ Vocal (TARS)
 ## 📜 Licence
 
 MIT
+
+## Designs et voix
+
+Trois designs au choix dans **Réglages → Design** (enregistrés côté serveur) :
+
+- **Monolithe** : alu mat, quatre dalles articulées, aucune carte.
+- **Cyanotype** : plan de mission, trait fin, cotes, orange sécurité.
+- **Éditorial** : la réponse occupe l'écran ; les dalles deviennent quatre barres.
+
+La réponse de TARS apparaît mot à mot avec une animation propre à chaque design
+(`prefers-reduced-motion` respecté). La conversation complète est dans le « Journal » (replié).
+
+Polices embarquées dans `static/fonts/` (SIL OFL, via @fontsource) : l'interface ne dépend d'aucun CDN.
+
+**Réglages → Voix** : préréglage TARS (grave, lente, sans émotion), voix du système et sliders
+hauteur/débit (stockés dans le navigateur). Le texte est « mis à plat » avant lecture
+(pas de `!`, d'emoji ni de markdown). Sous Android, le pont `NativeTTS.setVoice(pitch, rate)` applique les mêmes réglages.
+
+Après modification de `index.html` ou `Tars.py`, recopier vers `android/www/`, `windows/` et
+`android/app/src/main/python/` (copies identiques).

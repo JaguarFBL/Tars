@@ -1,0 +1,13 @@
+/* Polices embarquées (SIL OFL 1.1, via @fontsource) : fonctionne hors ligne, sous Android et Windows. */
+@font-face{font-family:"Archivo";font-style:normal;font-weight:500;font-display:swap;src:url("/static/fonts/archivo-latin-500-normal.woff2") format("woff2");}
+@font-face{font-family:"Archivo";font-style:normal;font-weight:800;font-display:swap;src:url("/static/fonts/archivo-latin-800-normal.woff2") format("woff2");}
+@font-face{font-family:"Archivo Narrow";font-style:normal;font-weight:400;font-display:swap;src:url("/static/fonts/archivo-narrow-latin-400-normal.woff2") format("woff2");}
+@font-face{font-family:"Archivo Narrow";font-style:normal;font-weight:500;font-display:swap;src:url("/static/fonts/archivo-narrow-latin-500-normal.woff2") format("woff2");}
+@font-face{font-family:"Barlow Condensed";font-style:normal;font-weight:600;font-display:swap;src:url("/static/fonts/barlow-condensed-latin-600-normal.woff2") format("woff2");}
+@font-face{font-family:"Barlow Condensed";font-style:normal;font-weight:700;font-display:swap;src:url("/static/fonts/barlow-condensed-latin-700-normal.woff2") format("woff2");}
+@font-face{font-family:"Barlow";font-style:normal;font-weight:400;font-display:swap;src:url("/static/fonts/barlow-latin-400-normal.woff2") format("woff2");}
+@font-face{font-family:"Barlow";font-style:normal;font-weight:500;font-display:swap;src:url("/static/fonts/barlow-latin-500-normal.woff2") format("woff2");}
+@font-face{font-family:"Bricolage Grotesque";font-style:normal;font-weight:700;font-display:swap;src:url("/static/fonts/bricolage-grotesque-latin-700-normal.woff2") format("woff2");}
+@font-face{font-family:"Bricolage Grotesque";font-style:normal;font-weight:800;font-display:swap;src:url("/static/fonts/bricolage-grotesque-latin-800-normal.woff2") format("woff2");}
+@font-face{font-family:"DM Sans";font-style:normal;font-weight:400;font-display:swap;src:url("/static/fonts/dm-sans-latin-400-normal.woff2") format("woff2");}
+@font-face{font-family:"DM Sans";font-style:normal;font-weight:700;font-display:swap;src:url("/static/fonts/dm-sans-latin-700-normal.woff2") format("woff2");}

@@ -179,7 +179,9 @@ class DesignTest(unittest.TestCase):
         self.assertEqual(status, 200)
         text = body.decode("utf-8")
         self.assertRegex(text, r'<html\b[^>]*\blang="fr"[^>]*\bdata-design="cyanotype"[^>]*>')
-        self.assertEqual(text.count("data-design="), 1)
+        # Un seul attribut dans la balise <html> (les sélecteurs CSS html[data-design=...] ne comptent pas).
+        html_tag = re.search(r"<html\b[^>]*>", text, re.I).group(0)
+        self.assertEqual(html_tag.count("data-design="), 1)
 
     def test_invalid_persisted_design_falls_back(self):
         settings = Path(self.tmp.name) / "settings.json"

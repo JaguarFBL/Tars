@@ -51,6 +51,7 @@ try:
     os.chmod(DATA, 0o700)
 except OSError:
     pass
+mimetypes.add_type("font/woff2", ".woff2")  # Python < 3.11 ne le connaît pas
 STATIC = (ROOT / "static").resolve()
 JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "settings.json"
 SECRETS = DATA / "secrets.json"
