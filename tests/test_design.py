@@ -159,12 +159,17 @@ class DesignTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("error", json.loads(body.decode("utf-8")))
 
+    def test_post_design_cyanotype_is_removed(self):
+        status, body = self._post_design("cyanotype", origin=self.origin)
+        self.assertEqual(status, 400)
+        self.assertIn("error", json.loads(body.decode("utf-8")))
+
     def test_post_design_without_auth_is_401(self):
-        status, _ = self._post_design("cyanotype", origin=self.origin, auth=False)
+        status, _ = self._post_design("editorial", origin=self.origin, auth=False)
         self.assertEqual(status, 401)
 
     def test_post_design_bad_origin_is_403(self):
-        status, _ = self._post_design("cyanotype", origin="https://evil.example")
+        status, _ = self._post_design("editorial", origin="https://evil.example")
         self.assertEqual(status, 403)
 
     def test_index_injects_data_design(self):
@@ -173,12 +178,12 @@ class DesignTest(unittest.TestCase):
         text = body.decode("utf-8")
         self.assertRegex(text, r'<html\b[^>]*\blang="fr"[^>]*\bdata-design="monolithe"[^>]*>')
 
-        status, _ = self._post_design("cyanotype", origin=self.origin)
+        status, _ = self._post_design("editorial", origin=self.origin)
         self.assertEqual(status, 200)
         status, body = self._request("GET", "/")
         self.assertEqual(status, 200)
         text = body.decode("utf-8")
-        self.assertRegex(text, r'<html\b[^>]*\blang="fr"[^>]*\bdata-design="cyanotype"[^>]*>')
+        self.assertRegex(text, r'<html\b[^>]*\blang="fr"[^>]*\bdata-design="editorial"[^>]*>')
         # Un seul attribut dans la balise <html> (les sélecteurs CSS html[data-design=...] ne comptent pas).
         html_tag = re.search(r"<html\b[^>]*>", text, re.I).group(0)
         self.assertEqual(html_tag.count("data-design="), 1)

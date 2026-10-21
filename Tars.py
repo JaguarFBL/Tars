@@ -205,7 +205,7 @@ load_secrets()
 
 # ---------- Réglages persistants ----------
 
-DESIGNS = ("monolithe", "cyanotype", "editorial")
+DESIGNS = ("monolithe", "editorial")
 DEFAULT_DESIGN = "monolithe"
 
 

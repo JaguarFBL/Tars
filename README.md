@@ -330,10 +330,9 @@ MIT
 
 ## Designs et voix
 
-Trois designs au choix dans **Réglages → Design** (enregistrés côté serveur) :
+Deux designs au choix dans **Réglages → Design** (enregistrés côté serveur) :
 
 - **Monolithe** : alu mat, quatre dalles articulées, aucune carte.
-- **Cyanotype** : plan de mission, trait fin, cotes, orange sécurité.
 - **Éditorial** : la réponse occupe l'écran ; les dalles deviennent quatre barres.
 
 La réponse de TARS apparaît mot à mot avec une animation propre à chaque design
