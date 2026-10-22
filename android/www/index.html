@@ -2,9 +2,15 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#E7E8E6">
 <title>TARS</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon-180x180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="application-name" content="TARS">
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <style>
 /* ==========================================================
@@ -42,8 +48,8 @@ button { cursor: pointer; background: none; border: 0; }
 main {
   width: 100%; max-width: 520px; min-height: 100dvh; padding: 22px 22px 18px;
   display: grid; gap: 14px 16px; align-content: start;
-  grid-template-columns: 1fr auto; grid-template-rows: auto auto auto auto 1fr auto auto auto auto;
-  grid-template-areas: "top top" "settings settings" "status status" "slab slab" "reply reply" "log log" "gauges gauges" "values values" "form form";
+  grid-template-columns: 1fr auto; grid-template-rows: auto auto auto auto 1fr auto auto auto auto auto;
+  grid-template-areas: "top top" "settings settings" "status status" "slab slab" "reply reply" "log log" "gauges gauges" "values values" "proposals proposals" "form form";
 }
 .top { grid-area: top; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .top h1 { font: 700 30px/1 var(--f-disp); letter-spacing: .1em; display: flex; align-items: center; gap: 10px; }
@@ -106,24 +112,77 @@ html[data-design="editorial"] .values-line { display: block; }
 .send:hover { filter: brightness(1.06); }
 
 /* ---------- Réglages ---------- */
-#settings { display: none; flex-direction: column; gap: 14px; padding: 18px 22px 24px; background: var(--bg); position: fixed; z-index: 20; top: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 520px; height: 100dvh; overflow-y: auto; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
-.settings-head { display: flex; align-items: center; justify-content: space-between; } .settings-head h2 { font: 700 22px var(--f-disp); letter-spacing: .08em; }
-#settings.open { display: flex; }
-.settings-row { display: grid; gap: 4px; }
-.settings-row label, .settings-label { font: 600 12px var(--f-body); color: var(--soft); letter-spacing: .06em; text-transform: uppercase; }
-#settings input[type="password"], #settings input[type="text"], #settings select { width: 100%; padding: 10px 10px; background: transparent; border: 1px solid var(--line-2); border-radius: var(--r); }
-#settings input[type="range"] { width: 100%; accent-color: var(--accent); }
-.range-row { display: grid; grid-template-columns: 72px 1fr 40px; align-items: center; gap: 10px; font: 500 13px var(--f-body); color: var(--soft); }
+#settings { display: none; flex-direction: column; padding: 0; background: var(--bg); position: fixed; z-index: 20; top: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 580px; height: 100dvh; max-height: 100dvh; overflow: hidden; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
+#settings.open { display: flex; animation: settingsIn .22s var(--ease); }
+@keyframes settingsIn { from { opacity: .72; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+body.settings-open { overflow: hidden; }
+
+.settings-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: calc(26px + env(safe-area-inset-top, 0px)) 26px 18px; }
+.settings-head h2 { font: 700 26px/1 var(--f-disp); letter-spacing: .08em; }
+#settings #settings-close { min-height: 38px; padding: 0 14px; font: 600 13px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--soft); border-color: transparent; }
+#settings #settings-close:hover { color: var(--text); border-color: var(--line-2); }
+
+.settings-tabs { flex: none; display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tab { flex: none; padding: 13px 10px 11px; margin-bottom: -1px; border-bottom: 2px solid transparent; font: 600 13px var(--f-body); letter-spacing: .09em; text-transform: uppercase; color: var(--soft); transition: color .2s var(--ease), border-color .2s var(--ease); }
+.settings-tab:hover { color: var(--text); }
+.settings-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.settings-tab:focus-visible { outline-offset: -3px; }
+
+.settings-panels { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 26px 26px calc(36px + env(safe-area-inset-bottom, 0px)); }
+.settings-panel { display: flex; flex-direction: column; gap: 28px; }
+.settings-panel[hidden] { display: none; }
+.settings-panel:focus-visible { outline-offset: -2px; }
+
+.settings-section { display: flex; flex-direction: column; gap: 16px; }
+.settings-section + .settings-section { border-top: 1px solid var(--line); padding-top: 26px; }
+.settings-section-head { display: flex; flex-direction: column; gap: 6px; }
+.settings-section-head h3 { display: flex; align-items: baseline; gap: 6px; font: 600 13px var(--f-body); letter-spacing: .1em; text-transform: uppercase; }
+.settings-section-head p { font: 400 13px/1.5 var(--f-body); color: var(--soft); }
+.settings-count { font: 500 12px var(--f-body); letter-spacing: 0; color: var(--soft); font-variant-numeric: tabular-nums; }
+.settings-count::before { content: "· "; }
+
+.settings-field { display: flex; flex-direction: column; gap: 8px; }
+.settings-field > label, .settings-field-head label { font: 600 13px/1.35 var(--f-body); letter-spacing: .01em; color: var(--soft); }
+.settings-field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.settings-field-head output { font: 500 13px var(--f-body); color: var(--text); font-variant-numeric: tabular-nums; }
+#settings input[type="password"], #settings input[type="text"], #settings input[type="search"], #settings select, #settings textarea { width: 100%; padding: 12px 13px; background: color-mix(in srgb, var(--text) 3.5%, transparent); border: 1px solid var(--line-2); border-radius: var(--r); font: 500 14px/1.5 var(--f-body); color: var(--text); }
+#settings textarea { resize: vertical; }
+#settings input:focus-visible, #settings select:focus-visible, #settings textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+#settings input[type="range"] { appearance: none; -webkit-appearance: none; width: 100%; height: 26px; background: transparent; cursor: pointer; }
+#settings input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--line-2); border-radius: 2px; }
+#settings input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -7px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent); }
+#settings input[type="range"]::-moz-range-track { height: 2px; background: var(--line-2); border-radius: 2px; }
+#settings input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent); }
+#settings input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; box-shadow: none; }
+
 .settings-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.settings-status { flex: 1; font: 500 13px var(--f-body); color: var(--soft); min-width: 120px; } .settings-status.ok { color: var(--text); }
-.clear, .ghost { padding: 0 14px; min-height: 40px; font: 600 13px var(--f-body); border: 1px solid var(--line-2); border-radius: var(--r); }
-.design-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.design-card { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px; text-align: left; border: 1px solid var(--line-2); border-radius: var(--r); }
+.settings-actions--end { justify-content: flex-end; }
+.settings-status { min-height: 1.35em; font: 500 13px/1.45 var(--f-body); color: var(--soft); overflow-wrap: anywhere; }
+.settings-status.ok { color: var(--text); }
+.settings-status.err { color: var(--err); }
+
+#settings .ghost, #settings .clear, #settings .settings-primary { min-height: 42px; padding: 0 15px; font: 600 13px var(--f-body); border: 1px solid var(--line-2); border-radius: var(--r); transition: border-color .18s var(--ease), color .18s var(--ease), background-color .18s var(--ease); }
+#settings .ghost:hover { border-color: var(--text); }
+#settings .clear { color: var(--err); border-color: color-mix(in srgb, var(--err) 32%, var(--line-2)); }
+#settings .clear:hover { border-color: var(--err); }
+#settings .settings-primary { padding: 0 18px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+#settings .settings-primary:hover { filter: brightness(1.05); }
+
+.settings-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; font: 500 14px var(--f-body); cursor: pointer; }
+.settings-switch input { appearance: none; -webkit-appearance: none; flex: none; width: 40px; height: 23px; border: 1px solid var(--line-2); border-radius: 999px; background: transparent; position: relative; cursor: pointer; transition: background-color .2s var(--ease), border-color .2s var(--ease); }
+.settings-switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 50%; background: var(--soft); transition: transform .2s var(--ease), background-color .2s var(--ease); }
+.settings-switch input:checked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.settings-switch input:checked::after { transform: translateX(17px); background: var(--accent); }
+
+.design-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.design-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 10px; text-align: left; background: color-mix(in srgb, var(--text) 3%, transparent); border: 1px solid var(--line-2); border-radius: var(--r); transition: border-color .2s var(--ease), box-shadow .2s var(--ease); }
+.design-card:hover { border-color: var(--soft); }
 .design-card[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.design-name { font: 700 14px var(--f-disp); } .design-words { font: 400 11px/1.3 var(--f-body); color: var(--soft); }
-.design-check { position: absolute; top: 4px; right: 6px; font-size: 12px; color: var(--accent); opacity: 0; } .design-card[aria-checked="true"] .design-check { opacity: 1; }
-.design-status { min-height: 1.2em; font: 500 12px var(--f-body); color: var(--soft); } .design-status.err { color: var(--err); }
-.design-preview { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 54px; padding: 6px; overflow: hidden; position: relative; }
+.design-name { font: 700 15px var(--f-disp); } .design-words { font: 400 12px/1.35 var(--f-body); color: var(--soft); }
+.design-check { position: absolute; top: 8px; right: 9px; font-size: 12px; color: var(--accent); opacity: 0; } .design-card[aria-checked="true"] .design-check { opacity: 1; }
+.design-status { min-height: 1.2em; font: 500 13px/1.4 var(--f-body); color: var(--soft); } .design-status.err { color: var(--err); }
+.design-preview { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 76px; padding: 10px; overflow: hidden; position: relative; }
 .dp-monolithe { background: #E7E8E6; border-radius: 2px; } .dp-monolithe .dp-slab { width: 9px; height: 100%; background: linear-gradient(90deg,#B4B8BC,#E2E4E6 45%,#A9ADB2); border-radius: 1px; }
 .dp-monolithe .dp-slab:nth-child(even) { height: 82%; } .dp-led { position: absolute; bottom: 2px; width: 4px; height: 4px; border-radius: 50%; background: #E39B2D; }
 .dp-editorial { background: #F2F3F0; flex-direction: row; align-items: center; justify-content: space-between; } .dp-recu { font: 800 17px var(--f-disp); color: #2B2E33; font-family: "Bricolage Grotesque", sans-serif; }
@@ -144,7 +203,7 @@ html[data-design="monolithe"] .send { background: #3A3F45; color: #fff; }
 /* ==========================================================
    3 · ÉDITORIAL — la réponse est le design
    ========================================================== */
-html[data-design="editorial"] main { grid-template-rows: auto auto auto 1fr auto auto auto auto; grid-template-areas: "top slab" "settings settings" "status status" "reply reply" "log log" "gauges gauges" "values values" "form form"; }
+html[data-design="editorial"] main { grid-template-rows: auto auto auto 1fr auto auto auto auto auto; grid-template-areas: "top slab" "settings settings" "status status" "reply reply" "log log" "gauges gauges" "values values" "proposals proposals" "form form"; }
 html[data-design="editorial"] .top { border-bottom: 0; padding-bottom: 0; } html[data-design="editorial"] .top h1 { font-weight: 800; letter-spacing: -.01em; font-size: 24px; }
 html[data-design="editorial"] .linkline { display: none; }
 html[data-design="editorial"] #slab { justify-self: end; height: 40px; width: 52px; padding: 0; gap: 4px; align-self: start; margin-top: -2px; }
@@ -169,49 +228,68 @@ html[data-design="editorial"] .gauges { display: none; }
 /* ---------- Mode widget (200×120) et embarqué ---------- */
 body.widget-mode { width: 200px; height: 120px; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 body.widget-mode main { padding: 8px; gap: 4px; min-height: 0; grid-template-areas: "status" "slab"; grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-body.widget-mode .top, body.widget-mode #settings, body.widget-mode #settings.open, body.widget-mode .reply, body.widget-mode #log, body.widget-mode .gauges, body.widget-mode #values, body.widget-mode #form { display: none !important; }
+body.widget-mode .top, body.widget-mode #settings, body.widget-mode #settings.open, body.widget-mode .reply, body.widget-mode #log, body.widget-mode .gauges, body.widget-mode #values, body.widget-mode #proposal-stack, body.widget-mode #form { display: none !important; }
 body.widget-mode #status { font-size: 11px; } body.widget-mode #slab { grid-area: slab; height: 44px; width: auto; padding: 0; gap: 4px; margin: 0 auto; border: 0 !important; }
 body.widget-mode #slab i { width: 12px; height: 100% !important; border: 0 !important; background: var(--accent) !important; box-shadow: none !important; animation: none !important; transform: none !important; } body.widget-mode #slab::before, body.widget-mode #slab::after { display: none !important; }
 body.widget-mode #slab { align-self: center; }
 body.embedded main { padding: 14px; }
 
-/* ---------- Sections repliables des réglages ---------- */
-.settings-block { border-top: 1px solid var(--line); padding-top: 8px; }
-.settings-block > summary { cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 0; list-style: none; font: 600 12px var(--f-body); color: var(--soft); letter-spacing: .06em; text-transform: uppercase; }
-.settings-block > summary::-webkit-details-marker { display: none; }
-.settings-block > summary::after { content: " +"; margin-left: auto; }
-.settings-block[open] > summary::after { content: " –"; }
-.settings-block > summary .count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--soft); }
-.block-body { display: grid; gap: 10px; padding-top: 6px; }
-.settings-status.err { color: var(--err); }
-#settings .toggle { display: flex; align-items: center; gap: 8px; font: 500 13px var(--f-body); color: var(--text); letter-spacing: 0; text-transform: none; }
-#settings .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
-#settings input[type="search"], #settings textarea { width: 100%; padding: 10px; background: transparent; border: 1px solid var(--line-2); border-radius: var(--r); font: 500 13px/1.4 var(--f-body); resize: vertical; }
+/* ---------- Listes : mémoire, historique, diagnostic ---------- */
 .memory-form { display: flex; gap: 8px; align-items: stretch; }
 .memory-form input { flex: 1; min-width: 0; }
-.mem-list { display: grid; gap: 8px; max-height: 300px; overflow-y: auto; }
-.mem-empty, .hist-empty { font: 500 13px var(--f-body); color: var(--soft); }
-.mem-item { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); }
-.mem-text { font: 500 13px/1.4 var(--f-body); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.mem-meta { display: flex; justify-content: space-between; gap: 8px; font: 500 11px var(--f-body); color: var(--soft); }
+.mem-list { display: grid; gap: 8px; max-height: min(42dvh, 360px); overflow-y: auto; padding-right: 2px; }
+.mem-empty, .hist-empty { font: 500 13px/1.45 var(--f-body); color: var(--soft); }
+.mem-item { display: grid; gap: 8px; padding: 12px 13px; background: color-mix(in srgb, var(--text) 3%, transparent); border: 1px solid var(--line); border-radius: var(--r); }
+.mem-text { font: 500 13px/1.5 var(--f-body); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.mem-meta { display: flex; justify-content: space-between; gap: 8px; font: 500 12px var(--f-body); color: var(--soft); }
 .mem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.mem-actions .ghost { min-height: 32px; padding: 0 10px; font-size: 12px; }
-.hist-list { display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
-.hist-item { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); }
+#settings .mem-actions .ghost { min-height: 34px; padding: 0 11px; font-size: 12px; }
+.hist-list { display: grid; gap: 8px; max-height: min(46dvh, 420px); overflow-y: auto; padding-right: 2px; }
+.hist-item { display: grid; gap: 5px; padding: 12px 13px; background: color-mix(in srgb, var(--text) 3%, transparent); border: 1px solid var(--line); border-radius: var(--r); }
 .hist-item.current { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .hist-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.hist-title { font: 600 13px var(--f-body); overflow-wrap: anywhere; }
-.hist-badge { font: 600 10px var(--f-body); color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
-.hist-meta { font: 500 11px var(--f-body); color: var(--soft); }
-.hist-preview { font: 500 12px/1.35 var(--f-body); color: var(--soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.hist-open { justify-self: start; min-height: 30px; padding: 0 10px; font-size: 12px; }
-.diag-list { display: grid; gap: 4px; font: 500 12px/1.45 var(--f-body); }
-.diag-line { display: grid; grid-template-columns: 108px 1fr; gap: 8px; }
+.hist-title { font: 600 14px/1.35 var(--f-body); overflow-wrap: anywhere; }
+.hist-badge { font: 600 10px var(--f-body); color: var(--accent); text-transform: uppercase; letter-spacing: .08em; }
+.hist-meta { font: 500 12px var(--f-body); color: var(--soft); }
+.hist-preview { font: 500 13px/1.45 var(--f-body); color: var(--soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#settings .hist-open { justify-self: start; min-height: 34px; padding: 0 12px; font-size: 12px; }
+.diag-list { display: grid; gap: 8px; font: 500 13px/1.45 var(--f-body); }
+.diag-line { display: grid; grid-template-columns: 118px 1fr; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.diag-line:last-child { border-bottom: 0; padding-bottom: 0; }
 .diag-line .diag-key { color: var(--soft); }
 .diag-line .diag-val { overflow-wrap: anywhere; }
 .diag-line .diag-val.bad { color: var(--err); }
 
+/* ---------- Suggestions de mémoire ---------- */
+.proposal-stack { grid-area: proposals; display: grid; gap: 8px; min-width: 0; }
+.proposal-stack[hidden] { display: none; }
+.proposal-stack[hidden] + #form { margin-top: -14px; }
+.proposal-card, .proposal-item { display: grid; gap: 8px; min-width: 0; padding: 12px 13px; background: color-mix(in srgb, var(--text) 3%, transparent); border: 1px solid var(--line); border-radius: var(--r); }
+.proposal-card { border-left: 2px solid var(--accent); }
+.proposal-kicker { font: 600 11px var(--f-body); letter-spacing: .09em; text-transform: uppercase; color: var(--soft); }
+.proposal-text { font: 500 14px/1.45 var(--f-body); overflow-wrap: anywhere; }
+.proposal-meta { font: 500 12px var(--f-body); color: var(--soft); }
+.proposal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.proposal-actions button { min-height: 38px; padding: 0 13px; font: 600 12px var(--f-body); border: 1px solid var(--line-2); border-radius: var(--r); transition: border-color .18s var(--ease), color .18s var(--ease), background-color .18s var(--ease); }
+.proposal-accept { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.proposal-accept:hover { filter: brightness(1.05); }
+.proposal-reject { color: var(--soft); }
+.proposal-reject:hover { border-color: var(--text); color: var(--text); }
+.proposal-actions button:disabled { opacity: .55; cursor: default; filter: none; }
+.proposal-more { font: 500 12px var(--f-body); color: var(--soft); }
+.proposal-list { display: grid; gap: 8px; max-height: min(40dvh, 340px); overflow-y: auto; padding-right: 2px; }
+.proposal-item .proposal-actions button { min-height: 34px; padding: 0 11px; }
+
 ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+@media (max-width: 480px) {
+  .settings-head { padding: calc(22px + env(safe-area-inset-top, 0px)) 20px 16px; }
+  .settings-panels { padding: 22px 20px calc(32px + env(safe-area-inset-bottom, 0px)); }
+  .settings-tabs { padding: 0 12px; }
+  .design-preview { height: 66px; }
+  .settings-actions .ghost, .settings-actions .clear, .settings-actions .settings-primary { flex: 1 1 auto; }
+  .proposal-stack { gap: 6px; }
+  .proposal-actions button { flex: 1 1 auto; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; animation-delay: 0s !important; }
 }
@@ -221,90 +299,167 @@ body.embedded main { padding: 14px; }
 <body data-state="off">
 <main>
   <header class="top">
-    <h1>TARS <button id="gear" class="gear" type="button" aria-label="Réglages" title="Réglages">⚙</button></h1>
+    <h1>TARS <button id="gear" class="gear" type="button" aria-label="Réglages" title="Réglages" aria-haspopup="dialog" aria-expanded="false">⚙</button></h1>
     <p class="linkline"><span class="state-dot"></span><span class="state-text">Liaison active</span></p>
   </header>
 
-  <section id="settings" aria-label="Réglages">
-    <div class="settings-head"><h2>Réglages</h2><button id="settings-close" class="ghost" type="button">Fermer</button></div>
-    <div class="settings-row">
-      <label for="groq-key">Clé Groq</label>
-      <input type="password" id="groq-key" placeholder="gsk_..." autocomplete="off" spellcheck="false">
+  <section id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <header class="settings-head">
+      <h2 id="settings-title">Réglages</h2>
+      <button id="settings-close" class="ghost" type="button">Fermer</button>
+    </header>
+
+    <div class="settings-tabs" role="tablist" aria-label="Sections des réglages">
+      <button class="settings-tab" type="button" role="tab" id="tab-appearance" aria-selected="true" aria-controls="panel-appearance" tabindex="0" data-tab="appearance">Apparence</button>
+      <button class="settings-tab" type="button" role="tab" id="tab-voice" aria-selected="false" aria-controls="panel-voice" tabindex="-1" data-tab="voice">Voix</button>
+      <button class="settings-tab" type="button" role="tab" id="tab-data" aria-selected="false" aria-controls="panel-data" tabindex="-1" data-tab="data">Données</button>
+      <button class="settings-tab" type="button" role="tab" id="tab-system" aria-selected="false" aria-controls="panel-system" tabindex="-1" data-tab="system">Système</button>
     </div>
-    <div class="settings-row">
-      <label for="groq-model">Modèle</label>
-      <input type="text" id="groq-model" value="openai/gpt-oss-120b" autocomplete="off" spellcheck="false">
-    </div>
-    <section class="settings-design" aria-labelledby="design-label">
-      <p class="settings-label" id="design-label">Design</p>
-      <div class="design-grid" role="radiogroup" aria-labelledby="design-label">
-        <button type="button" class="design-card" role="radio" aria-checked="true" data-choice="monolithe" aria-label="Monolithe. Mat, articulé, sec.">
-          <span class="design-preview dp-monolithe" aria-hidden="true"><span class="dp-slab"></span><span class="dp-slab"></span><span class="dp-slab"></span><span class="dp-slab"></span><span class="dp-led"></span></span>
-          <span class="design-name">Monolithe</span><span class="design-words">Mat · articulé · sec</span><span class="design-check" aria-hidden="true">✓</span>
-        </button>
-        <button type="button" class="design-card" role="radio" aria-checked="false" data-choice="editorial" aria-label="Éditorial. Parlé, typographique, léger.">
-          <span class="design-preview dp-editorial" aria-hidden="true"><span class="dp-recu">Reçu.</span><span class="dp-bars"><i></i><i></i><i></i><i></i></span></span>
-          <span class="design-name">Éditorial</span><span class="design-words">Parlé · typographique · léger</span><span class="design-check" aria-hidden="true">✓</span>
-        </button>
-      </div>
-      <p id="design-status" class="design-status" role="status" aria-live="polite"></p>
-    </section>
-    <section class="settings-voice" aria-labelledby="voice-label">
-      <p class="settings-label" id="voice-label">Voix</p>
-      <div class="settings-row"><select id="voice-preset" aria-label="Préréglage de voix"><option value="tars">TARS — grave, lente, sans émotion</option><option value="calm">Posée</option><option value="natural">Naturelle</option></select></div>
-      <div class="settings-row"><select id="voice-pick" aria-label="Voix du système"></select></div>
-      <div class="range-row"><label for="voice-pitch">Hauteur</label><input type="range" id="voice-pitch" min="0" max="1.2" step="0.05"><output id="voice-pitch-v"></output></div>
-      <div class="range-row"><label for="voice-rate">Débit</label><input type="range" id="voice-rate" min="0.6" max="1.3" step="0.05"><output id="voice-rate-v"></output></div>
-      <div class="settings-row">
-        <label class="toggle" for="piper-enabled"><input type="checkbox" id="piper-enabled"><span>Voix locale Piper</span></label>
-        <p id="piper-status" class="settings-status" role="status" aria-live="polite">Piper : vérification…</p>
-      </div>
-      <div class="settings-actions"><button id="voice-test" class="ghost" type="button">Tester la voix</button></div>
-    </section>
-    <details class="settings-block" id="diag-block">
-      <summary>Diagnostic</summary>
-      <div class="block-body">
-        <div class="settings-actions">
-          <button id="diag-run" class="ghost" type="button">Tester TARS</button>
-          <span id="diag-status" class="settings-status" role="status" aria-live="polite"></span>
+
+    <div class="settings-panels">
+      <section id="panel-appearance" class="settings-panel" role="tabpanel" aria-labelledby="tab-appearance" tabindex="0">
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3 id="design-label">Design</h3>
+            <p>Deux matières, deux façons d'occuper l'espace.</p>
+          </div>
+          <div class="design-grid" role="radiogroup" aria-labelledby="design-label">
+            <button type="button" class="design-card" role="radio" aria-checked="true" data-choice="monolithe" aria-label="Monolithe. Mat, articulé, sec.">
+              <span class="design-preview dp-monolithe" aria-hidden="true"><span class="dp-slab"></span><span class="dp-slab"></span><span class="dp-slab"></span><span class="dp-slab"></span><span class="dp-led"></span></span>
+              <span class="design-name">Monolithe</span><span class="design-words">Mat · articulé · sec</span><span class="design-check" aria-hidden="true">✓</span>
+            </button>
+            <button type="button" class="design-card" role="radio" aria-checked="false" data-choice="editorial" aria-label="Éditorial. Parlé, typographique, léger.">
+              <span class="design-preview dp-editorial" aria-hidden="true"><span class="dp-recu">Reçu.</span><span class="dp-bars"><i></i><i></i><i></i><i></i></span></span>
+              <span class="design-name">Éditorial</span><span class="design-words">Parlé · typographique · léger</span><span class="design-check" aria-hidden="true">✓</span>
+            </button>
+          </div>
+          <p id="design-status" class="design-status" role="status" aria-live="polite"></p>
         </div>
-        <div id="diag-lines" class="diag-list" aria-live="polite"></div>
-      </div>
-    </details>
-    <details class="settings-block" id="memory-block">
-      <summary>Ce que TARS sait <span id="memory-count" class="count">0</span></summary>
-      <div class="block-body">
-        <form id="memory-form" class="memory-form" autocomplete="off">
-          <input type="text" id="memory-input" maxlength="500" placeholder="Ajouter un fait…" aria-label="Nouveau fait">
-          <button class="ghost" type="submit">Ajouter</button>
-        </form>
-        <div class="settings-actions">
-          <button id="memory-refresh" class="ghost" type="button">Actualiser</button>
-          <button id="memory-export" class="ghost" type="button">Exporter</button>
-          <button id="memory-clear" class="clear" type="button">Tout effacer</button>
+      </section>
+
+      <section id="panel-voice" class="settings-panel" role="tabpanel" aria-labelledby="tab-voice" tabindex="0" hidden>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Timbre</h3>
+            <p>La voix que TARS utilise pour répondre.</p>
+          </div>
+          <div class="settings-field">
+            <label for="voice-preset">Préréglage</label>
+            <select id="voice-preset"><option value="tars">TARS — grave, lente, sans émotion</option><option value="calm">Posée</option><option value="natural">Naturelle</option></select>
+          </div>
+          <div class="settings-field">
+            <label for="voice-pick">Voix système</label>
+            <select id="voice-pick"></select>
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-head"><label for="voice-pitch">Hauteur</label><output id="voice-pitch-v" for="voice-pitch"></output></div>
+            <input type="range" id="voice-pitch" min="0" max="1.2" step="0.05">
+          </div>
+          <div class="settings-field">
+            <div class="settings-field-head"><label for="voice-rate">Débit</label><output id="voice-rate-v" for="voice-rate"></output></div>
+            <input type="range" id="voice-rate" min="0.6" max="1.3" step="0.05">
+          </div>
         </div>
-        <p id="memory-status" class="settings-status" role="status" aria-live="polite"></p>
-        <div id="memory-list" class="mem-list"></div>
-      </div>
-    </details>
-    <details class="settings-block" id="history-block">
-      <summary>Historique <span id="history-count" class="count">0</span></summary>
-      <div class="block-body">
-        <div class="settings-actions">
-          <button id="history-new" class="ghost" type="button">Nouvelle session</button>
-          <button id="history-refresh" class="ghost" type="button">Actualiser</button>
-          <button id="history-export" class="ghost" type="button">Exporter</button>
-          <button id="history-regen" class="ghost" type="button">Régénérer</button>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Voix locale</h3>
+            <p>Lecture Piper hors ligne, quand elle est installée.</p>
+          </div>
+          <label class="settings-switch" for="piper-enabled">
+            <span>Activer Piper</span>
+            <input type="checkbox" id="piper-enabled">
+          </label>
+          <p id="piper-status" class="settings-status" role="status" aria-live="polite">Piper : vérification…</p>
+          <div class="settings-actions">
+            <button id="voice-test" class="ghost" type="button">Tester la voix</button>
+          </div>
         </div>
-        <input type="search" id="history-search" placeholder="Rechercher une session…" aria-label="Rechercher une session">
-        <p id="history-status" class="settings-status" role="status" aria-live="polite"></p>
-        <div id="history-list" class="hist-list"></div>
-      </div>
-    </details>
-    <div class="settings-actions">
-      <span id="groq-status" class="settings-status">Clé Groq : …</span>
-      <button id="clear-key" class="clear" type="button">Effacer la clé</button>
-      <button id="save-config" class="send" type="button">Enregistrer</button>
+      </section>
+
+      <section id="panel-data" class="settings-panel" role="tabpanel" aria-labelledby="tab-data" tabindex="0" hidden>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Suggestions <span id="proposal-count" class="settings-count">0</span></h3>
+            <p>Les faits que TARS vous propose de retenir.</p>
+          </div>
+          <div id="proposal-list" class="proposal-list"></div>
+          <p id="proposal-status" class="settings-status" role="status" aria-live="polite"></p>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Mémoire <span id="memory-count" class="settings-count">0</span></h3>
+            <p>Les faits que TARS garde entre les sessions.</p>
+          </div>
+          <form id="memory-form" class="memory-form" autocomplete="off">
+            <input type="text" id="memory-input" maxlength="500" placeholder="Ajouter un fait…" aria-label="Nouveau fait">
+            <button class="ghost" type="submit">Ajouter</button>
+          </form>
+          <div class="settings-actions">
+            <button id="memory-refresh" class="ghost" type="button">Actualiser</button>
+            <button id="memory-export" class="ghost" type="button">Exporter</button>
+            <button id="memory-clear" class="clear" type="button">Tout effacer</button>
+          </div>
+          <p id="memory-status" class="settings-status" role="status" aria-live="polite"></p>
+          <div id="memory-list" class="mem-list"></div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Historique <span id="history-count" class="settings-count">0</span></h3>
+            <p>Reprendre, exporter ou régénérer une conversation.</p>
+          </div>
+          <div class="settings-actions">
+            <button id="history-new" class="ghost" type="button">Nouvelle session</button>
+            <button id="history-refresh" class="ghost" type="button">Actualiser</button>
+            <button id="history-export" class="ghost" type="button">Exporter</button>
+            <button id="history-regen" class="ghost" type="button">Régénérer</button>
+          </div>
+          <input type="search" id="history-search" placeholder="Rechercher une session…" aria-label="Rechercher une session">
+          <p id="history-status" class="settings-status" role="status" aria-live="polite"></p>
+          <div id="history-list" class="hist-list"></div>
+        </div>
+      </section>
+
+      <section id="panel-system" class="settings-panel" role="tabpanel" aria-labelledby="tab-system" tabindex="0" hidden>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Connexion</h3>
+            <p>Clé et modèle utilisés par le serveur TARS.</p>
+          </div>
+          <div class="settings-field">
+            <label for="groq-key">Clé Groq</label>
+            <input type="password" id="groq-key" placeholder="gsk_..." autocomplete="off" spellcheck="false">
+          </div>
+          <div class="settings-field">
+            <label for="groq-model">Modèle</label>
+            <input type="text" id="groq-model" value="openai/gpt-oss-120b" autocomplete="off" spellcheck="false">
+          </div>
+          <p id="groq-status" class="settings-status" role="status" aria-live="polite">Clé Groq : …</p>
+          <div class="settings-actions settings-actions--end">
+            <button id="clear-key" class="clear" type="button">Effacer la clé</button>
+            <button id="save-config" class="settings-primary" type="button">Enregistrer</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Application</h3>
+            <p>Installez TARS sur l'écran d'accueil. Hors ligne, la coquille reste disponible ; les réponses nécessitent le serveur.</p>
+          </div>
+          <button id="install-app" class="settings-primary" type="button" hidden>Installer TARS</button>
+          <p id="pwa-status" class="settings-status" role="status" aria-live="polite">En ligne</p>
+          <p id="offline-note" class="settings-status">Hors ligne : la coquille reste disponible, les réponses nécessitent le serveur.</p>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Diagnostic</h3>
+            <p>Vérifie le serveur, le modèle et les services en un clic.</p>
+          </div>
+          <div class="settings-actions">
+            <button id="diag-run" class="ghost" type="button">Tester TARS</button>
+            <span id="diag-status" class="settings-status" role="status" aria-live="polite"></span>
+          </div>
+          <div id="diag-lines" class="diag-list" aria-live="polite"></div>
+        </div>
+      </section>
     </div>
   </section>
 
@@ -324,6 +479,8 @@ body.embedded main { padding: 14px; }
     <div class="gauge-row"><span>Honnêteté</span><div class="bar" id="g-honnetete"></div></div>
   </div>
   <p id="values" class="values-line" aria-hidden="true"></p>
+
+  <div id="proposal-stack" class="proposal-stack" aria-live="polite" hidden></div>
 
   <form id="form" autocomplete="off">
     <input type="text" id="txt" placeholder="Ou écrivez ici…" aria-label="Message écrit">
@@ -362,10 +519,15 @@ let currentSessionId = "";
 let pendingTurn = null;
 let historySessions = [];
 let historyRefreshTimer = null;
+let historyLoadSeq = 0;
+let settingsTab = "appearance";
 let memoryFacts = [];
 let memoryEditingId = null;
 let memoryLoading = false;
 let memoryReloadPending = false;
+let memoryProposals = [];
+let proposalBusy = new Set();
+let proposalLoaded = false;
 
 /* ---------- Piper ---------- */
 let piperPref = null;
@@ -653,7 +815,11 @@ function discardPendingTurn(turn) {
 
 function scheduleHistoryRefresh() {
   clearTimeout(historyRefreshTimer);
-  historyRefreshTimer = setTimeout(() => { loadHistory({ silent: true }); }, 500);
+  historyRefreshTimer = setTimeout(() => {
+    if ($("#settings").classList.contains("open") && settingsTab === "data") {
+      loadHistory({ silent: true });
+    }
+  }, 500);
 }
 
 function formatDate(value) {
@@ -1501,7 +1667,10 @@ async function send(text) {
   try {
     await streamChatRequest({ text }, g, turn);
     if (turn.failed) discardPendingTurn(turn);
-    else commitPendingTurn(turn);
+    else {
+      commitPendingTurn(turn);
+      queueProposals(text);
+    }
   } catch (e) {
     if (e.name !== "AbortError" && g === gen) {
       if (!turn.assistant.trim()) {
@@ -1615,11 +1784,12 @@ function endSession() {
 
 /* ---------- Raccourcis clavier ---------- */
 document.addEventListener('keydown', (e) => {
-  if (e.key === ' ' && e.target === document.body) {
+  if (e.key === ' ' && e.target === document.body && !$("#settings").classList.contains("open")) {
     e.preventDefault();
     $("#slab").click();
   }
   if (e.key === 'Escape') {
+    if ($("#settings").classList.contains("open")) return;
     endSession();
   }
 });
@@ -1925,6 +2095,190 @@ async function exportMemory() {
   }
 }
 
+/* ---------- Mémoire proposée ---------- */
+function proposalStatus(message, isError) {
+  const el = $("#proposal-status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("err", !!isError);
+  el.classList.toggle("ok", !isError && /retenu|refusée/i.test(message || ""));
+}
+
+function normalizeProposal(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = typeof item.id === "string" ? item.id.trim() : "";
+  const text = typeof item.text === "string" ? item.text.trim() : "";
+  if (!id || !text) return null;
+  return { id, text, created: item.created };
+}
+
+function proposalButton(item, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = action === "accept" ? "proposal-accept" : "proposal-reject";
+  button.textContent = action === "accept" ? "Oui, retiens" : "Non";
+  button.setAttribute("aria-label", (action === "accept" ? "Accepter la suggestion : " : "Refuser la suggestion : ") + item.text);
+  button.disabled = proposalBusy.has(item.id);
+  button.addEventListener("click", () => decideProposal(item.id, action));
+  return button;
+}
+
+function proposalCard(item, variant) {
+  const card = document.createElement("article");
+  card.className = variant === "stack" ? "proposal-card" : "proposal-item";
+  card.dataset.proposalId = item.id;
+  if (variant === "stack") {
+    const kicker = document.createElement("p");
+    kicker.className = "proposal-kicker";
+    kicker.textContent = "Je retiens ça, commandant ?";
+    card.appendChild(kicker);
+  }
+  const text = document.createElement("p");
+  text.className = "proposal-text";
+  text.textContent = item.text;
+  card.appendChild(text);
+  const date = formatDate(item.created);
+  if (date !== "—") {
+    const meta = document.createElement("p");
+    meta.className = "proposal-meta";
+    meta.textContent = date;
+    card.appendChild(meta);
+  }
+  const actions = document.createElement("div");
+  actions.className = "proposal-actions";
+  actions.appendChild(proposalButton(item, "accept"));
+  actions.appendChild(proposalButton(item, "reject"));
+  card.appendChild(actions);
+  return card;
+}
+
+function renderProposals() {
+  const stack = $("#proposal-stack");
+  const list = $("#proposal-list");
+  const count = $("#proposal-count");
+  if (count) count.textContent = String(memoryProposals.length);
+  if (stack) {
+    stack.textContent = "";
+    stack.hidden = memoryProposals.length === 0;
+    if (memoryProposals.length) {
+      const visible = memoryProposals.slice(0, 2);
+      for (const item of visible) stack.appendChild(proposalCard(item, "stack"));
+      const rest = memoryProposals.length - visible.length;
+      if (rest > 0) {
+        const more = document.createElement("p");
+        more.className = "proposal-more";
+        more.textContent = `+ ${rest} autre${rest > 1 ? "s" : ""} proposition${rest > 1 ? "s" : ""} dans Données.`;
+        stack.appendChild(more);
+      }
+    }
+  }
+  if (list) {
+    list.textContent = "";
+    if (!memoryProposals.length) {
+      const empty = document.createElement("p");
+      empty.className = "mem-empty";
+      empty.textContent = "Aucune suggestion pour le moment.";
+      list.appendChild(empty);
+    } else {
+      for (const item of memoryProposals) list.appendChild(proposalCard(item, "list"));
+    }
+  }
+}
+
+async function loadProposals() {
+  try {
+    const response = await fetch(`${apiBase()}/memory/proposals`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    memoryProposals = Array.isArray(data.items)
+      ? data.items.map(normalizeProposal).filter(Boolean)
+      : [];
+    proposalLoaded = true;
+    renderProposals();
+  } catch (e) {
+    const panelVisible = $("#settings").classList.contains("open") && settingsTab === "data";
+    if (!proposalLoaded && panelVisible) {
+      proposalStatus("Suggestions indisponibles : " + (e.message || "backend absent"), true);
+    }
+    console.warn("Suggestions de mémoire indisponibles", e);
+  }
+}
+
+async function queueProposals(text) {
+  if (!text) return;
+  try {
+    const response = await fetch(`${apiBase()}/memory/propose`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) return;
+    const data = await response.json().catch(() => null);
+    if (!data || !Array.isArray(data.items)) return;
+    const incoming = data.items.map(normalizeProposal).filter(Boolean);
+    for (const item of incoming) {
+      if (!memoryProposals.some(proposal => proposal.id === item.id)) memoryProposals.push(item);
+    }
+    proposalLoaded = true;
+    renderProposals();
+  } catch (e) {
+    console.warn("Mémoire proposée indisponible", e);
+  }
+}
+
+async function decideProposal(id, action) {
+  const item = memoryProposals.find(proposal => proposal.id === id);
+  if (!item || proposalBusy.has(id)) return;
+  const active = document.activeElement;
+  const focusHost = active && active.closest ? active.closest("#proposal-stack, #proposal-list") : null;
+  const index = memoryProposals.findIndex(proposal => proposal.id === id);
+  let removed = false;
+  const focusFallback = focusHost && focusHost.id === "proposal-list" ? $("#tab-data") : $("#slab");
+  proposalBusy.add(id);
+  renderProposals();
+  proposalStatus(action === "accept" ? "Validation…" : "Refus…");
+  try {
+    const response = await fetch(`${apiBase()}/memory/proposals`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, id }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    memoryProposals = memoryProposals.filter(proposal => proposal.id !== id);
+    removed = true;
+    if (action === "accept" && data.fact && typeof data.fact === "object") {
+      const fact = data.fact;
+      const factId = typeof fact.id === "string" ? fact.id : "";
+      if (factId && typeof fact.text === "string" && !memoryFacts.some(existing => existing.id === factId)) {
+        memoryFacts.push(fact);
+        if (!memoryEditingId) renderMemory();
+      }
+    }
+    proposalStatus(action === "accept" ? "Fait retenu" : "Suggestion refusée");
+  } catch (e) {
+    proposalStatus("Erreur : " + (e.message || "action impossible"), true);
+  } finally {
+    proposalBusy.delete(id);
+    renderProposals();
+    if (focusHost) {
+      const container = focusHost.id === "proposal-list" ? $("#proposal-list") : $("#proposal-stack");
+      const cards = container ? Array.from(container.querySelectorAll(".proposal-card, .proposal-item")) : [];
+      let target = null;
+      if (removed) {
+        const next = cards[index];
+        target = next ? next.querySelector(".proposal-accept") : focusFallback;
+      } else {
+        const current = cards.find(card => card.dataset.proposalId === id);
+        target = current ? current.querySelector(".proposal-accept") : focusFallback;
+      }
+      if (target) target.focus();
+    }
+  }
+}
+
 /* ---------- Historique de sessions ---------- */
 function historyStatus(message, isError) {
   const el = $("#history-status");
@@ -1985,10 +2339,12 @@ function renderHistory() {
 }
 
 async function loadHistory(options = {}) {
+  const seq = ++historyLoadSeq;
   try {
     const response = await fetch(`${apiBase()}/history`, { credentials: "same-origin" });
     if (!response.ok) throw new Error("HTTP " + response.status);
     const data = await response.json();
+    if (seq !== historyLoadSeq) return null;
     historySessions = Array.isArray(data.sessions) ? data.sessions : [];
     if (data.current) currentSessionId = data.current;
     renderHistory();
@@ -2109,15 +2465,196 @@ function exportConversation() {
   historyStatus("Export prêt");
 }
 
+/* ---------- Application installable (PWA) ---------- */
+let deferredInstallPrompt = null;
 
-$("#gear").addEventListener("click", () => {
-  const open = $("#settings").classList.toggle("open");
-  if (open) {
-    loadConfig();
-    refreshPiperStatus();
-    loadMemory();
+function pwaStatus(message, isError) {
+  const el = $("#pwa-status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("err", !!isError);
+  el.classList.toggle("ok", !isError && /installée|autonome|acceptée/i.test(message || ""));
+}
+
+function isStandaloneApp() {
+  try {
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+  } catch (e) {}
+  return window.navigator.standalone === true;
+}
+
+function isNativeShell() {
+  return !!window.NativeTTS || /\bwv\b/i.test(window.navigator.userAgent || "");
+}
+
+function isInsecurePwaOrigin() {
+  if (window.isSecureContext) return false;
+  const host = location.hostname;
+  return host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]";
+}
+
+function updatePwaStatus() {
+  if (!navigator.onLine) { pwaStatus("Hors ligne — coquille disponible"); return; }
+  if (isNativeShell()) { pwaStatus("Application embarquée"); return; }
+  if (isStandaloneApp()) { pwaStatus("Installée · mode autonome"); return; }
+  if (isInsecurePwaOrigin()) {
+    pwaStatus("En ligne · installation indisponible : utilisez localhost/HTTPS ou l'APK.");
+    return;
+  }
+  if (deferredInstallPrompt) { pwaStatus("En ligne · installation disponible"); return; }
+  pwaStatus("En ligne");
+}
+
+async function installApp() {
+  const button = $("#install-app");
+  const prompt = deferredInstallPrompt;
+  if (!prompt) return;
+  deferredInstallPrompt = null;
+  if (button) { button.disabled = true; button.hidden = true; }
+  pwaStatus("Installation…");
+  try {
+    prompt.prompt();
+    const choice = await prompt.userChoice;
+    if (choice && choice.outcome === "accepted") pwaStatus("Installation acceptée");
+    else pwaStatus("Installation reportée");
+  } catch (e) {
+    pwaStatus("Installation indisponible", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function initPwa() {
+  const button = $("#install-app");
+  window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    if (button && !isNativeShell()) button.hidden = false;
+    updatePwaStatus();
+  });
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    if (button) button.hidden = true;
+    pwaStatus("Installée");
+  });
+  window.addEventListener("online", updatePwaStatus);
+  window.addEventListener("offline", updatePwaStatus);
+  if (button) button.addEventListener("click", installApp);
+  try {
+    const displayMode = window.matchMedia ? window.matchMedia("(display-mode: standalone)") : null;
+    if (displayMode && displayMode.addEventListener) displayMode.addEventListener("change", updatePwaStatus);
+  } catch (e) {}
+  if (isNativeShell()) {
+    if (button) button.hidden = true;
+  } else if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(error => {
+      console.warn("Service worker indisponible", error);
+    });
+  }
+  updatePwaStatus();
+}
+
+
+/* ---------- Réglages : onglets et chargement paresseux ---------- */
+const settingsTabs = Array.from(document.querySelectorAll(".settings-tab"));
+const settingsBackground = Array.from(document.querySelectorAll("main > :not(#settings)"));
+
+function setSettingsBackground(inert) {
+  for (const el of settingsBackground) {
+    if (inert) el.setAttribute("inert", "");
+    else el.removeAttribute("inert");
+  }
+}
+
+function activateSettingsTab(name, options = {}) {
+  const target = settingsTabs.find(tab => tab.dataset.tab === name) || settingsTabs[0];
+  if (!target) return;
+  settingsTab = target.dataset.tab;
+  for (const tab of settingsTabs) {
+    const selected = tab === target;
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+    tab.tabIndex = selected ? 0 : -1;
+    const panel = document.getElementById(tab.getAttribute("aria-controls"));
+    if (panel) panel.hidden = !selected;
+  }
+  const panels = $(".settings-panels");
+  if (panels) panels.scrollTop = 0;
+  if (settingsTab === "data" && !options.skipLoad) {
+    clearTimeout(historyRefreshTimer);
+    if (!memoryEditingId) loadMemory();
+    loadProposals();
     loadHistory();
   }
+  if (settingsTab === "voice" && !options.skipStatus) {
+    refreshPiperStatus();
+  }
+  if (!options.skipFocus) {
+    target.focus();
+    target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
+function openSettings() {
+  $("#settings").classList.add("open");
+  document.body.classList.add("settings-open");
+  $("#gear").setAttribute("aria-expanded", "true");
+  setSettingsBackground(true);
+  loadConfig();
+  activateSettingsTab(settingsTab);
+}
+
+function closeSettings() {
+  $("#settings").classList.remove("open");
+  document.body.classList.remove("settings-open");
+  setSettingsBackground(false);
+  $("#gear").setAttribute("aria-expanded", "false");
+  $("#gear").focus();
+}
+
+settingsTabs.forEach(tab => {
+  tab.addEventListener("click", () => {
+    if (tab.dataset.tab === settingsTab && tab.getAttribute("aria-selected") === "true") return;
+    activateSettingsTab(tab.dataset.tab);
+  });
+  tab.addEventListener("keydown", event => {
+    const index = settingsTabs.indexOf(tab);
+    let next = null;
+    if (event.key === "ArrowRight") next = (index + 1) % settingsTabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + settingsTabs.length) % settingsTabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = settingsTabs.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    activateSettingsTab(settingsTabs[next].dataset.tab);
+  });
+});
+
+$("#gear").addEventListener("click", () => {
+  if ($("#settings").classList.contains("open")) closeSettings();
+  else openSettings();
+});
+
+$("#settings-close").addEventListener("click", closeSettings);
+
+document.addEventListener("keydown", event => {
+  if (event.key !== "Tab" || !$("#settings").classList.contains("open")) return;
+  const focusables = Array.from($("#settings").querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+    .filter(el => !el.disabled && el.offsetParent !== null);
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !$("#settings").contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !$("#settings").contains(active))) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && $("#settings").classList.contains("open")) closeSettings();
 });
 
 $("#save-config").addEventListener("click", () => saveConfig());
@@ -2129,8 +2666,6 @@ $("#clear-key").addEventListener("click", () => {
 
 /* ---------- Événements diagnostic / mémoire / historique / Piper ---------- */
 $("#diag-run").addEventListener("click", runDiagnostic);
-$("#memory-block").addEventListener("toggle", event => { if (event.target.open) loadMemory(); });
-$("#history-block").addEventListener("toggle", event => { if (event.target.open) loadHistory(); });
 $("#memory-refresh").addEventListener("click", loadMemory);
 $("#memory-export").addEventListener("click", exportMemory);
 $("#memory-clear").addEventListener("click", async () => {
@@ -2184,6 +2719,7 @@ $("#form").addEventListener("submit", e => {
   const t = $("#txt").value.trim();
   $("#txt").value = "";
   if (t) {
+    $("#txt").blur();
     stopRec();
     stopRecording(true);
     send(t);
@@ -2207,15 +2743,17 @@ $("#voice-pick").addEventListener("change", e => {
   voicePrefs.name = e.target.value; saveVoicePrefs(); pickVoice();
 });
 $("#voice-test").addEventListener("click", speakTest);
-$("#settings-close").addEventListener("click", () => $("#settings").classList.remove("open"));
-document.addEventListener("keydown", e => { if (e.key === "Escape") $("#settings").classList.remove("open"); });
 
+activateSettingsTab("appearance", { skipFocus: true, skipLoad: true });
 syncVoiceUI();
 $("#piper-enabled").checked = piperEnabled;
 setPiperAvailability(null);
 renderGauges();
 loadConfig();
 refreshPiperStatus();
+renderProposals();
+loadProposals();
+initPwa();
 if (isWidget) loadHistory({ silent: true });
 else restoreCurrentSession();
 </script>

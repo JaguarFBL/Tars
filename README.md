@@ -14,6 +14,9 @@ Créer un assistant vocal **ultra-rapide** (< 1s de latence) avec la personnalit
 - ✅ **Widgets** : Widget Android natif + Widget Windows (Rainmeter)
 - ✅ **Fallback intégré** : Si le backend est down, bascule en mode local
 - ✅ **Clips audio** : Accusés de réception préenregistrés (optionnels)
+- **Mémoire proposée** : TARS suggère un fait après un échange, avec confirmation (« Je retiens ça, commandant ? ») ; rien n'est écrit avant acceptation
+- **PWA installable** : manifest, service worker et coquille hors ligne
+- **Icônes unifiées** : web, PWA et Android partagent le même jeu d'icônes
 
 ---
 
@@ -130,6 +133,9 @@ Voir : [windows/README.md](windows/README.md)
 - **Technologie** : Java natif + Chaquopy (Python embarqué) + WebView, sans Capacitor
 - **Backend** : intégré à l'APK via Chaquopy ; port aléatoire (`TARS_PORT=0`)
 - **Démarrage** : l'application attend que `/health` réponde avant d'ouvrir la WebView
+- **Affichage** : activité verrouillée en portrait
+- **Permissions** : `RECORD_AUDIO` et `MODIFY_AUDIO_SETTINGS`
+- **Static embarqué** : `static/` (manifest, `sw.js`, icônes) est inclus dans l'APK sous `android/app/src/main/python/static/`
 - **Widget** : widget natif Android
 - **Sécurité** : `allowBackup="false"`, trafic clair limité à la boucle locale (`127.0.0.1`, `localhost`), `data/` non versionné
 - **Installation** : builder l'APK avec Android Studio/Gradle
@@ -222,8 +228,11 @@ ANTHROPIC_API_KEY=sk-... python3 Tars.py
 - "TARS, honnêteté à 90 %" → Règle l'honnêteté à 90%
 
 ### Mémoire
-- "TARS, retiens que j'aime le café" → Ajoute un fait
-- "TARS, souviens-toi que la mission est importante" → Ajoute un fait
+- "TARS, retiens que j'aime le café" → Ajoute un fait immédiatement
+- "TARS, souviens-toi que la mission est importante" → Ajoute un fait immédiatement
+
+En dehors de ces commandes explicites, TARS ne peut que proposer un fait : il attend votre
+accord avant de l'écrire.
 
 ### Contrôle
 - "fin de mission" → Quitte le personnage TARS
@@ -362,6 +371,35 @@ hauteur/débit (stockés dans le navigateur). Le texte est « mis à plat » ava
   (`POST /history/open`), d'en créer une nouvelle (`POST /history/new`), d'exporter la conversation
   courante en Markdown et de régénérer la dernière réponse (`POST /chat {"regenerate":true}`).
 
+### Mémoire proposée
+
+Après un échange réussi, le frontend envoie votre message à `POST /memory/propose`. Le backend
+extrait 0 à 2 faits durables (préférences, identité, projet, contraintes) et les enregistre en
+`pending` dans `data/memory_proposals.json` (créé à la première proposition). Aucun fait
+n'est écrit dans `facts.json` avant acceptation.
+
+- **pending** : la proposition apparaît dans une carte inline (« Je retiens ça, commandant ? »)
+  et dans **Réglages → Données → Suggestions**.
+- **accepted** : `POST /memory/proposals {"action":"accept","id":"..."}` crée le fait ; la
+  proposition quitte la file.
+- **rejected** : `POST /memory/proposals {"action":"reject","id":"..."}` la refuse et bloque
+  une nouvelle proposition identique.
+
+Les propositions en attente expirent après 14 jours, sont dédupliquées et plafonnées à 12.
+La commande explicite « retiens que » (ou « souviens-toi que ») écrit immédiatement le fait,
+sans passer par une proposition.
+
+### PWA (web)
+
+`index.html` déclare `/manifest.webmanifest` (servi depuis `static/manifest.webmanifest`) et
+enregistre `/sw.js` (servi depuis `static/sw.js`). Le service worker précache le manifeste et
+les icônes, sert la navigation en réseau d'abord (repli sur le cache, puis coquille hors ligne)
+et les fichiers `/static/` en cache d'abord.
+
+L'installation et le service worker exigent un contexte sécurisé : `localhost` ou HTTPS.
+En HTTP sur le LAN, le navigateur n'affiche pas l'invite d'installation et n'enregistre pas
+le service worker ; l'APK Android reste la voie locale.
+
 ### Voix locale Piper
 
 Avec `TARS_PIPER_BIN` et `TARS_PIPER_MODEL` configurés, la case **Voix locale Piper** est activée
@@ -372,4 +410,6 @@ bascule immédiatement sur la voix système ou Android TTS et cesse de réessaye
 (`interrupt()`) annule les requêtes, vide la file et arrête l'audio sans déclencher de repli.
 
 Après modification de `index.html` ou `Tars.py`, recopier vers `android/www/`, `windows/` et
-`android/app/src/main/python/` (copies identiques).
+`android/app/src/main/python/` (copies identiques). Pour le web embarqué Android, synchroniser
+aussi `static/manifest.webmanifest`, `static/sw.js` et `static/icons/` vers
+`android/app/src/main/python/static/`.

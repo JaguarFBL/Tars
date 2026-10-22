@@ -717,5 +717,499 @@ class FeaturesTest(unittest.TestCase):
         self.assertEqual(json.loads(body.decode("utf-8")), {"error": "voix locale indisponible"})
 
 
+class MemoryProposalsTest(unittest.TestCase):
+    """Mémoire proposée : aucune écriture dans facts.json avant acceptation."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.proc = None
+        self.port = None
+        self.addCleanup(self._cleanup)
+        self._start_server()
+
+    def _stop_server(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        if self.proc is not None and self.proc.stdout is not None:
+            self.proc.stdout.close()
+        self.proc = None
+        self.port = None
+
+    def _cleanup(self):
+        self._stop_server()
+        if self.tmp is not None:
+            self.tmp.cleanup()
+
+    def _env(self):
+        env = os.environ.copy()
+        for key in (
+            "TARS_TOKEN", "TARS_BOOT_NONCE", "TARS_HOST", "TARS_PORT", "TARS_DATA",
+            "ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "TARS_PROVIDERS",
+            "TARS_MODEL", "MISTRAL_MODEL", "GROQ_MODEL", "TARS_PIPER_BIN", "TARS_PIPER_MODEL",
+        ):
+            env.pop(key, None)
+        env.update({
+            "TARS_MOCK": "1",
+            "TARS_TOKEN": TOKEN,
+            "TARS_BOOT_NONCE": NONCE,
+            "TARS_DATA": self.tmp.name,
+            "TARS_PORT": "0",
+            "TARS_HOST": "127.0.0.1",
+            "TARS_PIPER_MODEL": "",
+            "TARS_PIPER_BIN": "tars-piper-absent",
+            "PYTHONIOENCODING": "utf-8",
+        })
+        return env
+
+    def _start_server(self):
+        env = self._env()
+        self.proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT)],
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        lines = queue.Queue()
+
+        def pump():
+            try:
+                for line in self.proc.stdout:
+                    lines.put(line)
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            try:
+                line = lines.get(timeout=max(0.1, deadline - time.time()))
+            except queue.Empty:
+                break
+            if line is None:
+                break
+            match = re.search(r"TARS_READY port=(\d+)", line)
+            if match:
+                self.port = int(match.group(1))
+                self.assertGreater(self.port, 0)
+                return
+        self.fail(f"serveur non prêt (code de sortie={self.proc.poll()})")
+
+    def _request(self, method, path, headers=None, body=None, timeout=10):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        try:
+            conn.putrequest(method, path)
+            for key, value in (headers or {}).items():
+                conn.putheader(key, value)
+            data = body
+            if data is not None and not isinstance(data, bytes):
+                data = json.dumps(data).encode("utf-8")
+            if data is not None:
+                conn.putheader("Content-Length", str(len(data)))
+            conn.endheaders(data)
+            response = conn.getresponse()
+            return response.status, response.getheaders(), response.read()
+        finally:
+            conn.close()
+
+    def _auth_headers(self, origin=None):
+        headers = {"X-Tars-Token": TOKEN}
+        if origin is not None:
+            headers["Origin"] = origin
+        return headers
+
+    @property
+    def origin(self):
+        return f"http://127.0.0.1:{self.port}"
+
+    def _post(self, path, payload, auth=True):
+        headers = {"Content-Type": "application/json"}
+        if auth:
+            headers.update(self._auth_headers(self.origin))
+        else:
+            headers["Origin"] = self.origin
+        return self._request("POST", path, headers=headers, body=payload)
+
+    def _get_json(self, path):
+        status, _, body = self._request("GET", path, headers=self._auth_headers())
+        return status, json.loads(body.decode("utf-8"))
+
+    def _propose(self, text, auth=True):
+        status, _, body = self._post("/memory/propose", {"text": text}, auth=auth)
+        return status, json.loads(body.decode("utf-8"))
+
+    def _proposals(self):
+        status, data = self._get_json("/memory/proposals")
+        self.assertEqual(status, 200)
+        return data
+
+    def _decide(self, action, pid):
+        status, _, body = self._post("/memory/proposals", {"action": action, "id": pid})
+        return status, json.loads(body.decode("utf-8"))
+
+    def _memory_facts(self):
+        status, data = self._get_json("/memory")
+        self.assertEqual(status, 200)
+        return data["facts"]
+
+    def _add_fact(self, text):
+        status, _, body = self._post("/memory", {"action": "add", "text": text})
+        self.assertEqual(status, 200)
+        return json.loads(body.decode("utf-8"))["fact"]
+
+    def test_propose_creates_pending_without_writing_fact(self):
+        status, data = self._propose("Je préfère le café noir.")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["created"], 1)
+        self.assertEqual(len(data["items"]), 1)
+        item = data["items"][0]
+        self.assertRegex(item["id"], re.compile(r"^p_[0-9a-f]{12}$"))
+        self.assertEqual(item["text"], "Je préfère le café noir.")
+        self.assertEqual(set(item), {"id", "text", "created"})
+
+        proposals = self._proposals()
+        self.assertEqual(proposals["count"], 1)
+        self.assertEqual(proposals["items"], data["items"])
+        self.assertEqual(self._memory_facts(), [])
+
+    def test_propose_ignores_smalltalk_questions_and_explicit_fact(self):
+        for text in (
+            "Bonjour TARS",
+            "merci",
+            "ok",
+            "Comment vas-tu ?",
+            "Je mange une pomme.",
+            "Retiens que je préfère le thé.",
+        ):
+            status, data = self._propose(text)
+            self.assertEqual(status, 200, text)
+            self.assertEqual(data["created"], 0, text)
+            self.assertEqual(data["items"], [], text)
+        self.assertEqual(self._proposals()["count"], 0)
+        self.assertEqual(self._memory_facts(), [])
+
+    def test_dedupe_pending_and_existing_facts(self):
+        text = "Je préfère le café noir."
+        status, first = self._propose(text)
+        self.assertEqual(status, 200)
+        self.assertEqual(first["created"], 1)
+        status, second = self._propose(text)
+        self.assertEqual(status, 200)
+        self.assertEqual(second["created"], 0)
+        self.assertEqual(second["items"], first["items"])
+        self.assertEqual(self._proposals()["count"], 1)
+
+        self._add_fact("Je déteste les réunions.")
+        status, third = self._propose("Je déteste les réunions.")
+        self.assertEqual(status, 200)
+        self.assertEqual(third["created"], 0)
+        self.assertEqual(len(third["items"]), 1)
+
+    def test_accept_creates_single_fact_and_is_idempotent(self):
+        status, data = self._propose("J'utilise Python tous les jours.")
+        self.assertEqual(status, 200)
+        pid = data["items"][0]["id"]
+
+        status, accepted = self._decide("accept", pid)
+        self.assertEqual(status, 200)
+        self.assertEqual(accepted["status"], "ok")
+        self.assertEqual(accepted["action"], "accept")
+        self.assertRegex(accepted["fact"]["id"], FACT_ID_RE)
+        self.assertEqual(accepted["fact"]["text"], "J'utilise Python tous les jours.")
+        self.assertEqual(accepted["fact"]["source"], "conversation")
+        self.assertEqual(accepted["items"], [])
+
+        facts = self._memory_facts()
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["id"], accepted["fact"]["id"])
+        self.assertEqual(self._proposals()["count"], 0)
+
+        status, _ = self._decide("accept", pid)
+        self.assertEqual(status, 404)
+        self.assertEqual(len(self._memory_facts()), 1)
+
+    def test_reject_blocks_future_proposals(self):
+        status, data = self._propose("Je travaille dans la cybersécurité.")
+        self.assertEqual(status, 200)
+        pid = data["items"][0]["id"]
+
+        status, rejected = self._decide("reject", pid)
+        self.assertEqual(status, 200)
+        self.assertEqual(rejected["status"], "ok")
+        self.assertEqual(rejected["action"], "reject")
+        self.assertNotIn("fact", rejected)
+        self.assertEqual(rejected["items"], [])
+        self.assertEqual(self._memory_facts(), [])
+
+        status, again = self._propose("Je travaille dans la cybersécurité.")
+        self.assertEqual(status, 200)
+        self.assertEqual(again["created"], 0)
+        self.assertEqual(again["items"], [])
+        self.assertEqual(self._proposals()["count"], 0)
+
+        doc = json.loads(
+            (Path(self.tmp.name) / "memory_proposals.json").read_text("utf-8"))
+        self.assertEqual(len(doc["items"]), 1)
+        self.assertEqual(doc["items"][0]["status"], "rejected")
+        self.assertIn("rejected_at", doc["items"][0])
+
+        status, _ = self._decide("reject", pid)
+        self.assertEqual(status, 404)
+
+    def test_validation_auth_and_origin(self):
+        status, _ = self._decide("accept", "p_000000000000")
+        self.assertEqual(status, 404)
+        status, data = self._propose("Je préfère le café noir.")
+        self.assertEqual(status, 200)
+        pid = data["items"][0]["id"]
+        status, _ = self._decide("maybe", pid)
+        self.assertEqual(status, 400)
+        status, _ = self._decide("accept", "p_pas-un-id")
+        self.assertEqual(status, 400)
+        status, _ = self._decide("accept", "p_000000000000")
+        self.assertEqual(status, 404)
+
+        status, _ = self._propose("Je préfère le thé.", auth=False)
+        self.assertEqual(status, 401)
+        status, _, _ = self._request("GET", "/memory/proposals")
+        self.assertEqual(status, 401)
+        status, _, _ = self._request(
+            "GET", "/memory/proposals",
+            headers={"X-Tars-Token": TOKEN, "Origin": "https://evil.example"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_long_text_is_truncated(self):
+        status, data = self._propose("Je préfère " + "a" * 300)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["created"], 1)
+        text = data["items"][0]["text"]
+        self.assertEqual(len(text), 240)
+        self.assertTrue(text.startswith("Je préfère "))
+
+    def test_pending_cap_keeps_most_recent(self):
+        for index in range(13):
+            status, _ = self._propose(f"Je préfère le café numéro {index}.")
+            self.assertEqual(status, 200)
+        proposals = self._proposals()
+        self.assertEqual(proposals["count"], 12)
+        texts = [item["text"] for item in proposals["items"]]
+        self.assertNotIn("Je préfère le café numéro 0.", texts)
+        self.assertIn("Je préfère le café numéro 12.", texts)
+
+    def test_expired_pending_is_purged(self):
+        now = time.time()
+        doc = {"items": [
+            {"id": "p_aaaaaaaaaaaa", "text": "Je préfère le café noir.",
+             "created": now - 15 * 24 * 60 * 60, "status": "pending"},
+            {"id": "p_bbbbbbbbbbbb", "text": "J'aime le thé vert.",
+             "created": now - 60, "status": "pending"},
+        ]}
+        path = Path(self.tmp.name) / "memory_proposals.json"
+        path.write_text(json.dumps(doc), "utf-8")
+
+        proposals = self._proposals()
+        self.assertEqual(proposals["count"], 1)
+        self.assertEqual(proposals["items"][0]["id"], "p_bbbbbbbbbbbb")
+        persisted = json.loads(path.read_text("utf-8"))
+        self.assertEqual(len(persisted["items"]), 1)
+
+
+class PwaTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.proc = None
+        self.port = None
+        self.log_lines = []
+        self.addCleanup(self._cleanup)
+        self._start_server()
+
+    def _cleanup(self):
+        self._stop_server()
+        self.tmp.cleanup()
+
+    def _env(self):
+        env = os.environ.copy()
+        for key in (
+            "TARS_TOKEN", "TARS_BOOT_NONCE", "TARS_HOST", "TARS_PORT", "TARS_DATA",
+            "ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "TARS_PROVIDERS",
+            "TARS_MODEL", "MISTRAL_MODEL", "GROQ_MODEL", "TARS_PIPER_BIN", "TARS_PIPER_MODEL",
+        ):
+            env.pop(key, None)
+        env.update({
+            "TARS_MOCK": "1",
+            "TARS_TOKEN": TOKEN,
+            "TARS_BOOT_NONCE": NONCE,
+            "TARS_DATA": self.tmp.name,
+            "TARS_PORT": "0",
+            "TARS_HOST": "127.0.0.1",
+            "TARS_PIPER_MODEL": "",
+            "TARS_PIPER_BIN": "tars-piper-absent",
+            "PYTHONIOENCODING": "utf-8",
+        })
+        return env
+
+    def _stop_server(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        if self.proc is not None and self.proc.stdout is not None:
+            self.proc.stdout.close()
+        self.proc = None
+        self.port = None
+
+    def _start_server(self):
+        self.proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT)],
+            cwd=str(ROOT),
+            env=self._env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        lines = queue.Queue()
+
+        def pump():
+            try:
+                for line in self.proc.stdout:
+                    self.log_lines.append(line)
+                    lines.put(line)
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            try:
+                line = lines.get(timeout=max(0.1, deadline - time.time()))
+            except queue.Empty:
+                break
+            if line is None:
+                break
+            match = re.search(r"TARS_READY port=(\d+)", line)
+            if match:
+                self.port = int(match.group(1))
+                self.assertGreater(self.port, 0)
+                return
+        self.fail(f"serveur non prêt (code de sortie={self.proc.poll()})")
+
+    def _request(self, method, path, headers=None, body=None, timeout=10, host=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        try:
+            conn.putrequest(method, path, skip_host=host is not None)
+            if host is not None:
+                conn.putheader("Host", host)
+            for key, value in (headers or {}).items():
+                conn.putheader(key, value)
+            data = body
+            if data is not None and not isinstance(data, bytes):
+                data = json.dumps(data).encode("utf-8")
+            if data is not None:
+                conn.putheader("Content-Length", str(len(data)))
+            conn.endheaders(data)
+            response = conn.getresponse()
+            return response.status, response.getheaders(), response.read()
+        finally:
+            conn.close()
+
+    def _bootstrap_cookie(self):
+        status, headers, _ = self._request("GET", f"/?boot={NONCE}")
+        self.assertEqual(status, 302)
+        cookie = _header(headers, "Set-Cookie")
+        self.assertIsNotNone(cookie)
+        self.assertIn("tars_session=", cookie)
+        return cookie.split(";", 1)[0]
+
+    def test_manifest_is_served_publicly_with_valid_icons(self):
+        status, headers, body = self._request("GET", "/manifest.webmanifest")
+        self.assertEqual(status, 200)
+        ctype = _header(headers, "Content-Type") or ""
+        self.assertTrue(ctype.startswith("application/manifest+json"), ctype)
+        self.assertIn("no-store", (_header(headers, "Cache-Control") or "").lower())
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data["name"], "TARS")
+        self.assertEqual(data["short_name"], "TARS")
+        self.assertEqual(data["lang"], "fr")
+        self.assertEqual(data["id"], "/")
+        self.assertEqual(data["start_url"], "/")
+        self.assertEqual(data["scope"], "/")
+        self.assertEqual(data["display"], "standalone")
+        self.assertEqual(data["orientation"], "portrait")
+        self.assertEqual(data["background_color"], "#E7E8E6")
+        self.assertEqual(data["theme_color"], "#E7E8E6")
+        self.assertGreaterEqual(len(data["icons"]), 3)
+        purposes = {icon.get("purpose") for icon in data["icons"]}
+        self.assertIn("any", purposes)
+        self.assertIn("maskable", purposes)
+        by_size = {icon["sizes"]: icon for icon in data["icons"]}
+        self.assertIn("192x192", by_size)
+        self.assertIn("512x512", by_size)
+        for icon in data["icons"]:
+            self.assertTrue(icon["src"].startswith("/static/icons/"))
+            path = ROOT / icon["src"].lstrip("/")
+            self.assertTrue(path.is_file(), icon["src"])
+            self.assertGreater(path.stat().st_size, 0)
+
+    def test_service_worker_scope_and_cache_scope(self):
+        status, headers, body = self._request("GET", "/sw.js")
+        self.assertEqual(status, 200)
+        ctype = _header(headers, "Content-Type") or ""
+        self.assertTrue(ctype.startswith("application/javascript"), ctype)
+        self.assertEqual(_header(headers, "Service-Worker-Allowed"), "/")
+        self.assertIn("no-store", (_header(headers, "Cache-Control") or "").lower())
+        content = body.decode("utf-8")
+        self.assertIn('request.method !== "GET"', content)
+        self.assertIn("Range", content)
+        self.assertIn("tars-runtime-v1", content)
+        self.assertIn("skipWaiting", content)
+        self.assertIn("clients.claim", content)
+        self.assertIn("hors ligne", content)
+        for forbidden in ("/chat", "/state", "/memory", "/tts", "/stt"):
+            self.assertNotIn(forbidden, content)
+        self.assertNotRegex(
+            content,
+            r'self\.addEventListener\("fetch",\s*\(event\)\s*=>\s*\{\s*event\.respondWith',
+        )
+
+    def test_public_routes_skip_cookie_but_keep_host_guard(self):
+        for path in ("/manifest.webmanifest", "/sw.js"):
+            status, _, _ = self._request("GET", path)
+            self.assertEqual(status, 200, path)
+            status, _, _ = self._request("GET", path, host="evil.example")
+            self.assertEqual(status, 403, path)
+
+    def test_session_survives_restart_and_is_not_logged(self):
+        cookie = self._bootstrap_cookie()
+        key_path = Path(self.tmp.name) / "session.key"
+        self.assertTrue(key_path.is_file())
+        token = key_path.read_text("utf-8").strip()
+        self.assertRegex(token, r"^[A-Za-z0-9_-]{20,128}$")
+        self._stop_server()
+        self._start_server()
+        status, _, _ = self._request("GET", "/state", headers={"Cookie": cookie})
+        self.assertEqual(status, 200)
+        status, _, _ = self._request("GET", "/state")
+        self.assertEqual(status, 401)
+        self.assertEqual(key_path.read_text("utf-8").strip(), token)
+        self._stop_server()
+        self.assertNotIn(token, "".join(self.log_lines))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,115 +1,72 @@
 # Icônes TARS
 
-Ce dossier contient les icônes pour l'application TARS.
+Identité monolithe : quatre barres verticales crème sur fond graphite, avec une LED orange. Le dessin est volontairement sans texte, lisible dès 48 px et aligné sur l'interface (fond clair `#E7E8E6`, encre `#14171A`, accents orange).
 
----
+## Palette
 
-## 📁 Fichiers disponibles
+| Rôle | Couleur | Usage |
+|------|---------|-------|
+| Fond | `#14171A` | Fond plein de l'icône |
+| Barres | `#E7E8E6` | Quatre barres pilule |
+| LED | `#E39B2D` | Point de statut sous le monolithe |
 
-| Fichier | Format | Taille | Utilisation |
-|---------|--------|-------|-------------|
-| `tars.svg` | SVG vectoriel | - | Icône principale (toutes tailles) |
-| `tars-192x192.png` | PNG | 192x192 | Icône pour Android/Windows |
-| `tars-512x512.png` | PNG | 512x512 | Icône haute résolution |
+## Fichiers
 
----
+| Fichier | Taille | Usage |
+|---------|--------|-------|
+| `tars.svg` | 512 × 512 (vectoriel) | Maître de référence |
+| `tars-512x512.png` | 512 × 512 | Icône haute résolution |
+| `tars-maskable-512x512.png` | 512 × 512 | Maskable, marque dans les 80 % centraux |
+| `tars-192x192.png` | 192 × 192 | Android / PWA |
+| `apple-touch-icon-180x180.png` | 180 × 180 | Écran d'accueil iOS |
+| `favicon-32x32.png` | 32 × 32 | Favicon navigateur |
+| `preview.png` | 512 × 512 | Planche de contrôle (tailles réelles, zoom ×4) |
+| `generate_icons.py` | — | Générateur reproductible |
 
-## 🎨 Design de l'icône
+## Géométrie
 
-L'icône représente le **monolithe de TARS** avec :
-- Un **rectangle noir** (corps du monolithe)
-- **4 lignes verticales** (design caractéristique de TARS)
-- **3 lignes horizontales** (détails du monolithe)
-- Un **point vert** en haut (indicateur de statut)
-- Le texte **"TARS"** en vert fluo
+Le maître utilise un `viewBox` de 512 × 512 :
 
-**Couleurs** :
-- Fond : `#111111` (noir profond)
-- Lignes : `#00ff88` (vert fluo, comme dans l'interface)
-- Texte : `#00ff88` (vert fluo)
+- Barres : largeur 54, rayon 27, espacées de 28, alignées sur une base à `y = 376`.
+- Hauteurs : 168, 260, 192 et 216 ; la plus haute commence à `y = 116`.
+- LED : cercle de rayon 16 centré en `(256, 420)`.
+- Marges : 106 px à gauche et à droite, 116 px en haut, 76 px sous la LED.
+- La marque complète tient dans les 80 % centraux exigés pour le maskable.
 
----
+## Régénération
 
-## 📥 Génération des icônes PNG
+Depuis la racine du dépôt :
 
-### Depuis le SVG
-Utilise **Inkscape** ou **ImageMagick** pour générer les PNG :
-
-#### Avec ImageMagick :
-```bash
-# 192x192
-convert -background none -resize 192x192 static/icons/tars.svg static/icons/tars-192x192.png
-
-# 512x512
-convert -background none -resize 512x512 static/icons/tars.svg static/icons/tars-512x512.png
-
-# Autres tailles (pour favicon, etc.)
-convert -background none -resize 32x32 static/icons/tars.svg static/icons/tars-32x32.png
-convert -background none -resize 64x64 static/icons/tars.svg static/icons/tars-64x64.png
-convert -background none -resize 128x128 static/icons/tars.svg static/icons/tars-128x128.png
+```powershell
+python "static\icons\generate_icons.py"
 ```
 
-#### Avec Inkscape :
-```bash
-inkscape static/icons/tars.svg --export-png=static/icons/tars-192x192.png -w 192 -h 192
-inkscape static/icons/tars.svg --export-png=static/icons/tars-512x512.png -w 512 -h 512
-```
+Le script requiert Pillow (testé avec Pillow 12.1.1). Il rend chaque taille en suréchantillonnage ×8 puis réduit en Lanczos, et écrit :
 
----
+- les PNG web dans `static/icons/` ;
+- les mipmaps Android dans `android/app/src/main/res/mipmap-*/` ;
+- la planche `preview.png`.
 
-## 📌 Utilisation dans l'application
+Le SVG et les XML Android ne sont pas réécrits : ils partagent les mêmes coordonnées et doivent être ajustés ensemble en cas de modification du dessin.
 
-### Pour Android (Capacitor)
-1. Place `tars-192x192.png` dans `android/app/src/main/res/mipmap-xxxhdpi/`
-2. Renomme-le en `ic_launcher.png`
-3. Utilise [Android Asset Studio](https://romannurik.github.io/AndroidAssetStudio/) pour générer les autres densités
+## Android
 
-### Pour Windows (Electron)
-Dans `package.json` :
-```json
-"build": {
-  "win": {
-    "icon": "static/icons/tars-512x512.png"
-  }
-}
-```
+- Icône adaptative : `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml`.
+- Fond : `@color/ic_launcher_background` (`#14171A`).
+- Foreground : `res/drawable/ic_launcher_foreground.xml`, viewport 108 × 108, groupe mis à l'échelle 0,2 et translaté pour garder la marque dans la zone de sécurité 66 × 66 (bornes 24–84 en X, 22–86 en Y).
+- Mipmaps legacy : 48, 72, 96, 144 et 192 px. `ic_launcher_round.png` reprend le visuel avec un fond circulaire.
+- Manifest : `android:icon="@mipmap/ic_launcher"` et `android:roundIcon="@mipmap/ic_launcher_round"`.
 
-### Pour le Web (favicon)
-Dans `index.html` :
+## Web
+
+L'icône n'est pas encore référencée dans `index.html`. Pour l'ajouter :
+
 ```html
-<link rel="icon" href="/static/icons/tars-32x32.png" sizes="32x32">
+<link rel="icon" href="/static/icons/favicon-32x32.png" sizes="32x32">
 <link rel="icon" href="/static/icons/tars-192x192.png" sizes="192x192">
-<link rel="apple-touch-icon" href="/static/icons/tars-192x192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon-180x180.png">
 ```
 
----
+## Contrôles
 
-## 🎯 Tailles recommandées
-
-| Plateforme | Taille | Fichier |
-|------------|-------|---------|
-| Favicon | 32x32 | `tars-32x32.png` |
-| Android (mdpi) | 48x48 | `tars-48x48.png` |
-| Android (hdpi) | 72x72 | `tars-72x72.png` |
-| Android (xhdpi) | 96x96 | `tars-96x96.png` |
-| Android (xxhdpi) | 144x144 | `tars-144x144.png` |
-| Android (xxxhdpi) | 192x192 | `tars-192x192.png` |
-| iOS | 180x180 | `tars-180x180.png` |
-| Windows | 256x256 | `tars-256x256.png` |
-| Haute résolution | 512x512 | `tars-512x512.png` |
-
----
-
-## 🔧 Outils utiles
-
-- **[Favicon Generator](https://realfavicongenerator.net/)** : Génère toutes les tailles nécessaires
-- **[Android Asset Studio](https://romannurik.github.io/AndroidAssetStudio/)** : Génère les icônes Android
-- **[ImageMagick](https://imagemagick.org/)** : Outil en ligne de commande pour convertir les images
-
----
-
-## 📝 Notes
-
-- Le SVG est **modifiable** : tu peux ajuster les couleurs, les tailles ou les détails.
-- Pour un **effet glow**, ajoute un filtre SVG comme dans le code.
-- Les icônes PNG doivent avoir un **fond transparent** pour une meilleure intégration.
+Le générateur vérifie pour chaque PNG : existence, taille attendue, mode RGB/RGBA et fichier non vide. La planche `preview.png` affiche le maître, les tailles réelles 48 et 32 px, un zoom ×4 du rendu 48 px et l'icône 180 px.

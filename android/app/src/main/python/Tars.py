@@ -50,6 +50,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("TARS_DATA", ROOT / "data"))
 DATA.mkdir(parents=True, exist_ok=True)
+SESSION_FILE = DATA / "session.key"
 try:
     os.chmod(DATA, 0o700)
 except OSError:
@@ -62,6 +63,7 @@ MARK = DATA / "consolidated_until.txt"
 FACTS_BAK = DATA / "facts.md.bak"
 FACTS_JSON = DATA / "facts.json"
 FACTS_META = DATA / "facts.meta.json"
+MEMORY_PROPOSALS = DATA / "memory_proposals.json"
 HISTORY_FILE = DATA / "history.jsonl"
 TTS_CACHE = DATA / "tts-cache"
 
@@ -79,7 +81,35 @@ PIPER_MODEL = (os.environ.get("TARS_PIPER_MODEL") or "").strip()
 # Sécurité
 TOKEN = (os.environ.get("TARS_TOKEN") or "").strip() or secrets.token_urlsafe(32)
 BOOT_NONCE = (os.environ.get("TARS_BOOT_NONCE") or "").strip() or secrets.token_urlsafe(24)
-SESSION = secrets.token_urlsafe(32)
+
+
+def _load_session_token():
+    """Relit le jeton de session persistant, ou en crée un nouveau."""
+    try:
+        token = SESSION_FILE.read_text("utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        token = ""
+    if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", token):
+        return token
+    token = secrets.token_urlsafe(32)
+    try:
+        tmp = SESSION_FILE.with_name(SESSION_FILE.name + ".tmp")
+        tmp.write_text(token, "utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, SESSION_FILE)
+        try:
+            os.chmod(SESSION_FILE, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return token
+
+
+SESSION = _load_session_token()
 HOST = os.environ.get("TARS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TARS_PORT", "8000"))
 MOCK = os.environ.get("TARS_MOCK") == "1"
@@ -97,8 +127,12 @@ MAX_BODY = 16 * 1024
 MAX_AUDIO = 10 * 1024 * 1024
 MAX_TEXT = 4000
 MAX_FACT = 500
+MAX_PROPOSAL = 240
 MAX_TTS = 600
 MEMORY_MAX = 200
+PROPOSAL_PENDING_MAX = 12
+PROPOSAL_HISTORY_MAX = 200
+PROPOSAL_TTL = 14 * 24 * 60 * 60
 TOMBSTONE_MAX = MEMORY_MAX * 4
 TTS_CACHE_MAX = 200
 STATE_TTL = 120
@@ -135,6 +169,7 @@ FILE_LOCK = threading.Lock()
 HIST_LOCK = threading.Lock()
 HISTORY_FILE_LOCK = threading.Lock()
 MEM_LOCK = threading.Lock()
+PROP_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()
 TTS_LOCK = threading.Lock()
 
@@ -147,6 +182,7 @@ _LAST_ERROR = {"message": "", "at": 0.0, "source": ""}
 
 _FACT_SOURCES = ("conversation", "manuel", "consolidation", "import")
 _FACT_ID_RE = re.compile(r"^f_[0-9a-f]{12}$")
+_PROPOSAL_ID_RE = re.compile(r"^p_[0-9a-f]{12}$")
 _SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -657,6 +693,306 @@ def memory_export():
             date = ""
         lines.append("- {} ({}, {})".format(item["text"], item["source"], date))
     return "\n".join(lines) + "\n"
+
+
+# ---------- Mémoire proposée (rien n'est écrit avant acceptation) ----------
+
+def _new_proposal_id():
+    return "p_" + secrets.token_hex(6)
+
+
+def _valid_proposal_id(pid):
+    return isinstance(pid, str) and _PROPOSAL_ID_RE.fullmatch(pid) is not None
+
+
+def _clean_proposal_text(text):
+    if not isinstance(text, str):
+        return None
+    cleaned = _clean_fact_text(text[:MAX_FACT])
+    if cleaned is None:
+        return None
+    cleaned = cleaned[:MAX_PROPOSAL].strip()
+    return cleaned or None
+
+
+def _proposal_created(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return time.time()
+    if not (0 < value < 4102444800):
+        return time.time()
+    return float(value)
+
+
+def _sanitize_proposal_items(raw):
+    now = time.time()
+    out, ids, seen = [], set(), set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        if status not in ("pending", "accepted", "rejected"):
+            continue
+        text = _clean_proposal_text(entry.get("text"))
+        if text is None:
+            continue
+        created = _proposal_created(entry.get("created"))
+        if status == "pending" and now - created > PROPOSAL_TTL:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        pid = entry.get("id")
+        if not _valid_proposal_id(pid) or pid in ids:
+            pid = _new_proposal_id()
+            while pid in ids:
+                pid = _new_proposal_id()
+        item = {
+            "id": pid,
+            "text": text,
+            "created": created,
+            "status": status,
+        }
+        if status == "accepted":
+            fid = entry.get("fact_id")
+            if _valid_fact_id(fid):
+                item["fact_id"] = fid
+        elif status == "rejected":
+            item["rejected_at"] = _proposal_created(entry.get("rejected_at"))
+        out.append(item)
+        ids.add(pid)
+        seen.add(key)
+
+    pending = sorted(
+        (item for item in out if item["status"] == "pending"),
+        key=lambda item: item["created"])
+    if len(pending) > PROPOSAL_PENDING_MAX:
+        keep = {item["id"] for item in pending[-PROPOSAL_PENDING_MAX:]}
+        out = [item for item in out if item["status"] != "pending" or item["id"] in keep]
+
+    history = sorted(
+        (item for item in out if item["status"] != "pending"),
+        key=lambda item: item["created"])
+    if len(history) > PROPOSAL_HISTORY_MAX:
+        drop = {item["id"] for item in history[:-PROPOSAL_HISTORY_MAX]}
+        out = [item for item in out if item["id"] not in drop]
+    return out
+
+
+def _write_proposals(items):
+    _atomic_write(
+        MEMORY_PROPOSALS,
+        json.dumps({"items": items}, ensure_ascii=False, indent=2) + "\n")
+
+
+def _load_proposals_locked():
+    try:
+        doc = json.loads(MEMORY_PROPOSALS.read_text("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return []
+    raw = doc.get("items") if isinstance(doc, dict) else None
+    if not isinstance(raw, list):
+        return []
+    items = _sanitize_proposal_items(raw)
+    if raw != items:
+        try:
+            _write_proposals(items)
+        except (OSError, UnicodeError):
+            pass
+    return items
+
+
+def _public_proposal(item):
+    return {"id": item["id"], "text": item["text"], "created": item["created"]}
+
+
+def _pending_proposals_locked():
+    return [_public_proposal(item) for item in _load_proposals_locked()
+            if item["status"] == "pending"]
+
+
+def pending_proposals():
+    with PROP_LOCK:
+        return _pending_proposals_locked()
+
+
+def _proposal_known_keys(items):
+    known = {item["text"].strip().lower() for item in memory_items()}
+    known.update(_load_facts_meta()["tombstones"])
+    for item in items:
+        if item["status"] in ("pending", "rejected"):
+            known.add(item["text"].lower())
+    return known
+
+
+_PROPOSAL_MARKERS = re.compile(
+    r"(?:\bje\s+m['\u2019]?appelle\b|\bje\s+pr[ée]f[èe]re\b|\bj['\u2019]?aime\b|"
+    r"\bj['\u2019]?adore\b|\bje\s+d[ée]teste\b|\bje\s+ne\s+supporte\s+pas\b|"
+    r"\bj['\u2019]?utilise\b|\bje\s+travaille\b|"
+    r"\bj['\u2019]?habite\b|\bje\s+vis\b|\bmon\s+projet\b|\bmon\s+m[ée]tier\b|"
+    r"\bmon\s+objectif\b|\bma\s+machine\b|\bmes\s+outils\b|\bmon\s+[ée]quipe\b|"
+    r"\bmon\s+entreprise\b|\bma\s+ville\b|\bmon\s+pays\b|\bma\s+langue\b|"
+    r"\bmon\s+ordinateur\b|\bmon\s+budget\b|\bmes\s+horaires\b|\bje\s+d[ée]veloppe\b|"
+    r"\bj['\u2019]?[ée]tudie\b|\bje\s+code\b|\bje\s+parle\b|\bje\s+m['\u2019]?entra[îi]ne\b|"
+    r"\bje\s+suis\s+(?:d[ée]veloppeur(?:se)?|ing[ée]nieur(?:e)?|[ée]tudiant(?:e)?|"
+    r"professeur|chercheur(?:se)?|consultant(?:e)?|freelance|ind[ée]pendant(?:e)?|"
+    r"salari[ée](?:e)?|retrait[ée](?:e)?|p[èe]re|m[èe]re|mari[ée](?:e)?|c[ée]libataire|"
+    r"bas[ée](?:e)?\s+[àa]|allergique)\b|"
+    r"\bj['\u2019]?ai\s+\d{1,3}\s+ans\b|\bj['\u2019]?ai\s+besoin\b|"
+    r"\bje\s+ne\s+peux\s+pas\b|\bmon\s+anniversaire\b)",
+    re.I)
+_PROPOSAL_SPLIT_RE = re.compile(r"(?<=[.!?\u2026])\s+|\n+")
+_PROPOSAL_JSON_RE = re.compile(r"\{.*\}", re.S)
+
+
+def _heuristic_proposals(text):
+    if not isinstance(text, str):
+        return []
+    raw = text.strip()
+    if len(raw) < 10 or parse_fact(raw):
+        return []
+    out, seen = [], set()
+    for part in _PROPOSAL_SPLIT_RE.split(raw):
+        sentence = part.strip()
+        if len(sentence) < 10 or "?" in sentence:
+            continue
+        match = _PROPOSAL_MARKERS.search(sentence)
+        if match is None:
+            continue
+        clause = sentence[match.start():].strip(" ,;:-")
+        if len(clause) < 10:
+            continue
+        cleaned = _clean_proposal_text(clause)
+        if cleaned is None or cleaned.lower() in seen:
+            continue
+        seen.add(cleaned.lower())
+        out.append(cleaned)
+        if len(out) >= 2:
+            break
+    return out
+
+
+_PROPOSAL_SYSTEM = (
+    "Tu extrais la mémoire durable du commandant. Repère uniquement les faits durables et utiles "
+    "sur lui : préférences, identité, projet, contraintes, outils, dates. Ignore le small talk, "
+    "les questions et le temporaire. Réponds uniquement par un objet JSON valide de la forme "
+    "{\"facts\": [\"...\"]}, avec 0 à 2 faits courts, sans texte hors JSON."
+)
+
+
+def _parse_proposal_payload(raw):
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.I | re.S)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        match = _PROPOSAL_JSON_RE.search(text)
+        if match is None:
+            return None
+        try:
+            doc = json.loads(match.group(0))
+        except ValueError:
+            return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("facts"), list):
+        return None
+    out, seen = [], set()
+    for entry in doc["facts"][:2]:
+        cleaned = _clean_proposal_text(entry)
+        if cleaned is None or cleaned.lower() in seen:
+            continue
+        seen.add(cleaned.lower())
+        out.append(cleaned)
+    return out
+
+
+def _llm_proposals(text):
+    raw = "".join(stream_llm(
+        _PROPOSAL_SYSTEM,
+        [{"role": "user", "content": text[:MAX_TEXT]}],
+        max_tokens=180))
+    return _parse_proposal_payload(raw)
+
+
+def extract_memory_proposals(text):
+    """Extrait 0 à 2 faits durables ; ne touche jamais facts.json."""
+    if not isinstance(text, str):
+        return []
+    text = text.strip()
+    if not text or parse_fact(text):
+        return []
+    if MOCK and not any([GROQ_API_KEY, MISTRAL_API_KEY, API_KEY]):
+        return _heuristic_proposals(text)
+    try:
+        facts = _llm_proposals(text)
+    except Exception as e:
+        print(f"[PROPOSAL] extraction indisponible : {e}", file=sys.stderr)
+        facts = None
+    if facts is None:
+        return _heuristic_proposals(text)
+    return [fact for fact in facts if not parse_fact(fact)]
+
+
+def proposals_create(texts):
+    """Crée des propositions pending dédupliquées. Retourne (pending, créées)."""
+    created = 0
+    with PROP_LOCK:
+        items = _load_proposals_locked()
+        known = _proposal_known_keys(items)
+        now = time.time()
+        for raw in texts or []:
+            text = _clean_proposal_text(raw)
+            if text is None or text.lower() in known:
+                continue
+            used = {item["id"] for item in items}
+            pid = _new_proposal_id()
+            while pid in used:
+                pid = _new_proposal_id()
+            items.append({
+                "id": pid,
+                "text": text,
+                "created": now,
+                "status": "pending",
+            })
+            known.add(text.lower())
+            created += 1
+        if created:
+            items = _sanitize_proposal_items(items)
+            _write_proposals(items)
+        pending = [_public_proposal(item) for item in items if item["status"] == "pending"]
+    return pending, created
+
+
+def proposals_decide(action, pid):
+    """Accepte ou refuse une proposition pending.
+
+    Rejouer une action sur un id déjà traité renvoie None (404) sans doublon :
+    une acceptation crée au plus un fait, un refus reste bloquant.
+    """
+    with PROP_LOCK:
+        items = _load_proposals_locked()
+        index = next((i for i, item in enumerate(items)
+                      if item["id"] == pid and item["status"] == "pending"), None)
+        if index is None:
+            return None
+        fact = None
+        if action == "reject":
+            items[index]["status"] = "rejected"
+            items[index].pop("fact_id", None)
+            items[index]["rejected_at"] = time.time()
+        else:
+            fact = memory_add(items[index]["text"], "conversation")
+            if fact is None:
+                return {"invalid": True, "fact": None, "items": _pending_proposals_locked()}
+            items[index]["status"] = "accepted"
+            items[index]["fact_id"] = fact["id"]
+            items[index].pop("rejected_at", None)
+        items = _sanitize_proposal_items(items)
+        _write_proposals(items)
+        pending = [_public_proposal(item) for item in items if item["status"] == "pending"]
+    return {"invalid": False, "fact": fact, "items": pending}
 
 
 def sync_memory_from_lines(lines, expected_cleared_at=None):
@@ -1463,6 +1799,17 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), ctype)
 
+    def _serve_public_file(self, name, ctype, headers=None):
+        """Sert un fichier public de static/ sans authentification."""
+        target = (STATIC / name).resolve()
+        if STATIC not in target.parents or not target.is_file():
+            return self._err(404, "introuvable")
+        try:
+            data = target.read_bytes()
+        except OSError:
+            return self._err(404, "introuvable")
+        self._send(200, data, ctype, no_store=True, headers=headers)
+
     def _handle_config_post(self, data):
         global GROQ_API_KEY, MISTRAL_API_KEY, API_KEY, GROQ_MODEL
         updates = {}
@@ -1557,6 +1904,37 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(500, "mémoire non enregistrée")
             return self._send(200, json.dumps({"status": "ok"}))
         return self._err(400, "action invalide")
+
+    def _handle_propose_post(self, data):
+        text = data.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return self._err(400, "texte invalide")
+        try:
+            candidates = extract_memory_proposals(text[:MAX_TEXT])
+            items, created = proposals_create(candidates)
+        except (OSError, UnicodeError) as e:
+            record_error("memory", f"écriture des propositions impossible : {e}")
+            return self._err(500, "mémoire non enregistrée")
+        self._send(200, json.dumps({"items": items, "created": created}, ensure_ascii=False))
+
+    def _handle_proposals_post(self, data):
+        action = data.get("action")
+        pid = data.get("id")
+        if action not in ("accept", "reject") or not _valid_proposal_id(pid):
+            return self._err(400, "action ou identifiant invalide")
+        try:
+            result = proposals_decide(action, pid)
+        except (OSError, UnicodeError) as e:
+            record_error("memory", f"écriture des propositions impossible : {e}")
+            return self._err(500, "mémoire non enregistrée")
+        if result is None:
+            return self._err(404, "proposition introuvable")
+        if result["invalid"]:
+            return self._err(400, "texte invalide")
+        payload = {"status": "ok", "action": action, "items": result["items"]}
+        if action == "accept":
+            payload["fact"] = result["fact"]
+        self._send(200, json.dumps(payload, ensure_ascii=False))
 
     def _handle_tts(self, data):
         text = data.get("text")
@@ -1714,6 +2092,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/manifest.webmanifest":
+            return self._serve_public_file("manifest.webmanifest", "application/manifest+json")
+        if path == "/sw.js":
+            return self._serve_public_file(
+                "sw.js", "application/javascript; charset=utf-8",
+                headers={"Service-Worker-Allowed": "/"})
         if path == "/":
             query = parse_qs(parsed.query, keep_blank_values=True)
             if "boot" in query:
@@ -1758,6 +2142,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(401, "token")
             items = memory_items()
             self._send(200, json.dumps({"facts": items, "count": len(items)}, ensure_ascii=False),
+                       no_store=True)
+        elif path == "/memory/proposals":
+            if not self._origin_ok():
+                return self._err(403, "accès refusé")
+            if not self._auth():
+                return self._err(401, "token")
+            items = pending_proposals()
+            self._send(200, json.dumps({"items": items, "count": len(items)}, ensure_ascii=False),
                        no_store=True)
         elif path == "/memory/export":
             if not self._origin_ok():
@@ -1806,6 +2198,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         allowed = ("/chat", "/status", "/config", "/stt", "/design", "/tts", "/memory",
+                   "/memory/propose", "/memory/proposals",
                    "/history/open", "/history/new")
         if path not in allowed:
             return self._err(404, "introuvable")
@@ -1827,6 +2220,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/memory":
             return self._handle_memory_post(data)
+
+        if path == "/memory/propose":
+            return self._handle_propose_post(data)
+
+        if path == "/memory/proposals":
+            return self._handle_proposals_post(data)
 
         if path == "/tts":
             return self._handle_tts(data)

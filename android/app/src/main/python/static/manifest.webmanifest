@@ -1,0 +1,33 @@
+{
+  "name": "TARS",
+  "short_name": "TARS",
+  "description": "Assistant vocal et texte local, privé et sans dépendance au cloud.",
+  "lang": "fr",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#E7E8E6",
+  "theme_color": "#E7E8E6",
+  "icons": [
+    {
+      "src": "/static/icons/tars-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/tars-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/tars-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
