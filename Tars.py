@@ -25,6 +25,7 @@ Bootstrap : ouvrir http://localhost:<port>/?boot=<TARS_BOOT_NONCE> une seule foi
 Le nonce est consommé et un cookie de session HttpOnly SameSite=Strict est posé.
 """
 
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -33,11 +34,13 @@ import re
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -57,6 +60,10 @@ JOURNAL, FACTS, SETTINGS = DATA / "journal.jsonl", DATA / "facts.md", DATA / "se
 SECRETS = DATA / "secrets.json"
 MARK = DATA / "consolidated_until.txt"
 FACTS_BAK = DATA / "facts.md.bak"
+FACTS_JSON = DATA / "facts.json"
+FACTS_META = DATA / "facts.meta.json"
+HISTORY_FILE = DATA / "history.jsonl"
+TTS_CACHE = DATA / "tts-cache"
 
 # Clés API
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -66,6 +73,8 @@ MODEL = os.environ.get("TARS_MODEL", "claude-haiku-4-5-20251001")
 MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "open-mistral-7b")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 PROVIDERS = [p.strip() for p in os.environ.get("TARS_PROVIDERS", "groq,mistral,anthropic").split(",") if p.strip()]
+PIPER_BIN = (os.environ.get("TARS_PIPER_BIN") or "piper").strip() or "piper"
+PIPER_MODEL = (os.environ.get("TARS_PIPER_MODEL") or "").strip()
 
 # Sécurité
 TOKEN = (os.environ.get("TARS_TOKEN") or "").strip() or secrets.token_urlsafe(32)
@@ -87,9 +96,15 @@ def get_boot_nonce():
 MAX_BODY = 16 * 1024
 MAX_AUDIO = 10 * 1024 * 1024
 MAX_TEXT = 4000
+MAX_FACT = 500
+MAX_TTS = 600
+MEMORY_MAX = 200
+TOMBSTONE_MAX = MEMORY_MAX * 4
+TTS_CACHE_MAX = 200
 STATE_TTL = 120
 DOWN_FOR = 300
 CONSOLIDATE_CHUNK = 8000
+HISTORY_MAX_RECORDS = 5000
 
 # STT Groq
 STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -118,11 +133,21 @@ STATE_LOCK = threading.Lock()
 LOCK = threading.Lock()
 FILE_LOCK = threading.Lock()
 HIST_LOCK = threading.Lock()
+HISTORY_FILE_LOCK = threading.Lock()
+MEM_LOCK = threading.Lock()
+ERROR_LOCK = threading.Lock()
+TTS_LOCK = threading.Lock()
 
 # Données
 HISTORY = []
 TURN_GEN = 0
+CURRENT_SESSION = ""
 _FACT_EVENTS = []
+_LAST_ERROR = {"message": "", "at": 0.0, "source": ""}
+
+_FACT_SOURCES = ("conversation", "manuel", "consolidation", "import")
+_FACT_ID_RE = re.compile(r"^f_[0-9a-f]{12}$")
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def set_status(st, from_client=False):
@@ -149,6 +174,24 @@ def _atomic_write(path, text):
             os.chmod(path, 0o600)
         except OSError:
             pass
+
+
+def record_error(source, message):
+    """Mémorise la dernière erreur, sans jamais exposer une clé API."""
+    msg = str(message or "")
+    for key in (GROQ_API_KEY, MISTRAL_API_KEY, API_KEY):
+        if key:
+            msg = msg.replace(key, "[clé masquée]")
+    msg = msg.encode("utf-8", "replace").decode("utf-8")[:300]
+    with ERROR_LOCK:
+        _LAST_ERROR["message"] = msg
+        _LAST_ERROR["at"] = time.time()
+        _LAST_ERROR["source"] = str(source or "")[:40]
+
+
+def last_error_snapshot():
+    with ERROR_LOCK:
+        return dict(_LAST_ERROR)
 
 
 # ---------- Secrets persistants ----------
@@ -286,6 +329,11 @@ def journal_add(kind, text):
             pass
         if kind == "fact":
             _FACT_EVENTS.append((now, text))
+    if kind == "fact":
+        try:
+            memory_add(text, "conversation")
+        except (OSError, UnicodeError) as e:
+            print(f"[MEMORY] écriture des faits impossible : {e}", file=sys.stderr)
 
 
 def journal_read():
@@ -308,6 +356,346 @@ def load_fact_events():
         _FACT_EVENTS[:] = [(e["t"], e["text"]) for e in journal_read() if e["kind"] == "fact"]
 
 
+# ---------- Mémoire structurée (facts.json, source de vérité) ----------
+
+def _new_fact_id():
+    return "f_" + secrets.token_hex(6)
+
+
+def _valid_fact_id(fid):
+    return isinstance(fid, str) and _FACT_ID_RE.fullmatch(fid) is not None
+
+
+def _clean_fact_text(text):
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if "\n" in text or "\r" in text:
+        text = " ".join(text.split())
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    if not text or len(text) > MAX_FACT:
+        return None
+    return text
+
+
+def _fact_created(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return time.time()
+    # Rejette NaN et les dates aberrantes.
+    if not (0 < value < 4102444800):
+        return time.time()
+    return float(value)
+
+
+def _tombstone_key(text):
+    cleaned = _clean_fact_text(text)
+    return cleaned.lower() if cleaned is not None else None
+
+
+def _load_facts_meta():
+    try:
+        doc = json.loads(FACTS_META.read_text("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        doc = None
+    meta = {"tombstones": [], "cleared_at": 0.0}
+    if not isinstance(doc, dict):
+        return meta
+    cleared = doc.get("cleared_at")
+    if isinstance(cleared, (int, float)) and not isinstance(cleared, bool):
+        if 0 <= cleared < 4102444800:
+            meta["cleared_at"] = float(cleared)
+    raw = doc.get("tombstones")
+    if isinstance(raw, list):
+        seen = set()
+        for entry in raw:
+            key = _tombstone_key(entry)
+            if key is None or key in seen:
+                continue
+            seen.add(key)
+            meta["tombstones"].append(key)
+        meta["tombstones"] = meta["tombstones"][-TOMBSTONE_MAX:]
+    return meta
+
+
+def _save_facts_meta(meta):
+    doc = {
+        "tombstones": list(meta["tombstones"])[-TOMBSTONE_MAX:],
+        "cleared_at": float(meta["cleared_at"]),
+    }
+    _atomic_write(FACTS_META, json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+
+
+def _tombstone_add(meta, text):
+    key = _tombstone_key(text)
+    if key is None:
+        return
+    tombstones = [item for item in meta["tombstones"] if item != key]
+    tombstones.append(key)
+    meta["tombstones"] = tombstones[-TOMBSTONE_MAX:]
+
+
+def _tombstone_discard(meta, text):
+    key = _tombstone_key(text)
+    if key is None:
+        return
+    meta["tombstones"] = [item for item in meta["tombstones"] if item != key]
+
+
+def _without_tombstones(items):
+    tombstones = set(_load_facts_meta()["tombstones"])
+    if not tombstones:
+        return items
+    return [item for item in items if item["text"].lower() not in tombstones]
+
+
+def _sanitize_fact_items(raw):
+    out, seen, ids = [], set(), set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        text = _clean_fact_text(entry.get("text"))
+        if text is None:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        fid = entry.get("id")
+        if not _valid_fact_id(fid) or fid in ids:
+            seed = "fact:" + key
+            fid = "f_" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+            while fid in ids:
+                seed += "#"
+                fid = "f_" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+        source = entry.get("source")
+        if source not in _FACT_SOURCES:
+            source = "import"
+        out.append({
+            "id": fid,
+            "text": text,
+            "created": _fact_created(entry.get("created")),
+            "source": source,
+        })
+        ids.add(fid)
+        seen.add(key)
+        if len(out) >= MEMORY_MAX:
+            break
+    return out
+
+
+def _facts_header():
+    try:
+        for line in FACTS.read_text("utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                return stripped
+    except OSError:
+        pass
+    return "# Faits sur le commandant"
+
+
+def _facts_md_text(items):
+    lines = [_facts_header()]
+    if items:
+        lines.append("")
+        lines.extend("- " + item["text"] for item in items)
+    return "\n".join(lines) + "\n"
+
+
+def _import_facts_md():
+    try:
+        raw = FACTS.read_text("utf-8", errors="replace")
+    except OSError:
+        return []
+    now = time.time()
+    out, seen, ids = [], set(), set()
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            continue
+        text = stripped[2:].strip()[:MAX_FACT]
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        fid = _new_fact_id()
+        while fid in ids:
+            fid = _new_fact_id()
+        ids.add(fid)
+        out.append({"id": fid, "text": text, "created": now, "source": "import"})
+        if len(out) >= MEMORY_MAX:
+            break
+    return out
+
+
+def _write_memory(items):
+    _atomic_write(FACTS_JSON, json.dumps({"items": items}, ensure_ascii=False, indent=2) + "\n")
+    _atomic_write(FACTS, _facts_md_text(items))
+
+
+def _load_facts_locked():
+    try:
+        doc = json.loads(FACTS_JSON.read_text("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        doc = None
+    if isinstance(doc, dict) and isinstance(doc.get("items"), list):
+        return _sanitize_fact_items(doc["items"])
+    items = _without_tombstones(_import_facts_md())
+    try:
+        _write_memory(items)
+    except (OSError, UnicodeError):
+        pass
+    return items
+
+
+def memory_items():
+    """Retourne les faits structurés, sans jamais lever sur un fichier absent/corrompu."""
+    with MEM_LOCK:
+        return [dict(item) for item in _load_facts_locked()]
+
+
+def memory_add(text, source="manuel"):
+    cleaned = _clean_fact_text(text)
+    if cleaned is None:
+        return None
+    if source not in _FACT_SOURCES:
+        source = "manuel"
+    with MEM_LOCK:
+        meta = _load_facts_meta()
+        items = _load_facts_locked()
+        key = cleaned.lower()
+        for item in items:
+            if item["text"].lower() == key:
+                if key in meta["tombstones"]:
+                    _tombstone_discard(meta, cleaned)
+                    _save_facts_meta(meta)
+                return dict(item)
+        used = {existing["id"] for existing in items}
+        fid = _new_fact_id()
+        while fid in used:
+            fid = _new_fact_id()
+        item = {
+            "id": fid,
+            "text": cleaned,
+            "created": time.time(),
+            "source": source,
+        }
+        items.append(item)
+        if len(items) > MEMORY_MAX:
+            items = items[-MEMORY_MAX:]
+        _write_memory(items)
+        if key in meta["tombstones"]:
+            _tombstone_discard(meta, cleaned)
+            _save_facts_meta(meta)
+        return dict(item)
+
+
+def memory_update(fid, text):
+    cleaned = _clean_fact_text(text)
+    if not _valid_fact_id(fid) or cleaned is None:
+        return None
+    with MEM_LOCK:
+        meta = _load_facts_meta()
+        items = _load_facts_locked()
+        index = None
+        for i, item in enumerate(items):
+            if item["id"] == fid:
+                index = i
+                break
+        if index is None:
+            return None
+        key = cleaned.lower()
+        for i, item in enumerate(items):
+            if i != index and item["text"].lower() == key:
+                return None
+        old_text = items[index]["text"]
+        items[index]["text"] = cleaned
+        _write_memory(items)
+        _tombstone_add(meta, old_text)
+        _tombstone_discard(meta, cleaned)
+        _save_facts_meta(meta)
+        return dict(items[index])
+
+
+def memory_delete(fid):
+    if not _valid_fact_id(fid):
+        return False
+    with MEM_LOCK:
+        meta = _load_facts_meta()
+        items = _load_facts_locked()
+        target = next((item for item in items if item["id"] == fid), None)
+        if target is None:
+            return False
+        _write_memory([item for item in items if item["id"] != fid])
+        _tombstone_add(meta, target["text"])
+        _save_facts_meta(meta)
+        return True
+
+
+def memory_clear():
+    with MEM_LOCK:
+        meta = _load_facts_meta()
+        for item in _load_facts_locked():
+            _tombstone_add(meta, item["text"])
+        meta["cleared_at"] = time.time()
+        _save_facts_meta(meta)
+        _write_memory([])
+    return True
+
+
+def memory_export():
+    items = memory_items()
+    lines = ["# Mémoire TARS", ""]
+    for item in items:
+        try:
+            date = datetime.fromtimestamp(item["created"], timezone.utc).isoformat(timespec="seconds")
+        except (OSError, OverflowError, ValueError):
+            date = ""
+        lines.append("- {} ({}, {})".format(item["text"], item["source"], date))
+    return "\n".join(lines) + "\n"
+
+
+def sync_memory_from_lines(lines, expected_cleared_at=None):
+    """Aligne facts.json sur les lignes de facts.md après consolidation."""
+    with MEM_LOCK:
+        meta = _load_facts_meta()
+        if expected_cleared_at is not None and meta["cleared_at"] > expected_cleared_at:
+            return None
+        tombstones = set(meta["tombstones"])
+        old_items = _load_facts_locked()
+        by_text = {item["text"].strip().lower(): item for item in old_items}
+        out, seen, ids, now = [], set(), set(), time.time()
+        for raw in lines:
+            stripped = raw.strip()
+            if not stripped.startswith("-"):
+                continue
+            text = _clean_fact_text(stripped[1:].strip()[:MAX_FACT])
+            if text is None:
+                continue
+            key = text.lower()
+            if key in tombstones or key in seen:
+                continue
+            seen.add(key)
+            old = by_text.get(key)
+            if old is not None:
+                out.append(dict(old))
+                ids.add(old["id"])
+            else:
+                fid = _new_fact_id()
+                while fid in ids:
+                    fid = _new_fact_id()
+                ids.add(fid)
+                out.append({"id": fid, "text": text, "created": now, "source": "consolidation"})
+            if len(out) >= MEMORY_MAX:
+                break
+        _write_memory(out)
+        return out
+
+
 def read_mark():
     try:
         return float(MARK.read_text().strip())
@@ -316,13 +704,23 @@ def read_mark():
 
 
 def context_pack():
-    try:
-        facts = FACTS.read_text("utf-8").strip()
-    except OSError:
-        facts = ""
+    items = memory_items()
+    facts = "\n".join("- " + item["text"] for item in items)
+    known = {item["text"].strip().lower() for item in items}
+    with MEM_LOCK:
+        meta = _load_facts_meta()
+    tombstones = set(meta["tombstones"])
+    cleared_at = meta["cleared_at"]
     since = read_mark()
+    fresh = []
     with LOCK:
-        fresh = [t for (ts, t) in _FACT_EVENTS if ts > since][-30:]
+        events = [(ts, t) for (ts, t) in _FACT_EVENTS if ts > since and ts > cleared_at][-30:]
+    for _, text in events:
+        key = _tombstone_key(text)
+        if key is None or key in tombstones or key in known:
+            continue
+        known.add(key)
+        fresh.append(text)
     return facts, fresh
 
 
@@ -343,11 +741,189 @@ def normalize(msgs):
     return out
 
 
+def _valid_session_id(sid):
+    return isinstance(sid, str) and _SESSION_RE.fullmatch(sid) is not None
+
+
+def _read_history_locked():
+    try:
+        raw = HISTORY_FILE.read_text("utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in raw.splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        sid = rec.get("session")
+        stamp = rec.get("t")
+        user = rec.get("user")
+        assistant = rec.get("assistant")
+        if not _valid_session_id(sid):
+            continue
+        if isinstance(stamp, bool) or not isinstance(stamp, (int, float)):
+            continue
+        if not (0 < stamp < 4102444800):
+            continue
+        if not isinstance(user, str) or not isinstance(assistant, str):
+            continue
+        out.append({"session": sid, "t": float(stamp), "user": user, "assistant": assistant})
+    return out
+
+
+def history_records():
+    with HISTORY_FILE_LOCK:
+        return _read_history_locked()
+
+
+def _messages_from_records(records, sid):
+    out = []
+    for rec in records:
+        if rec["session"] != sid:
+            continue
+        if rec["user"].strip():
+            out.append({"role": "user", "content": rec["user"].strip(), "t": rec["t"]})
+        if rec["assistant"].strip():
+            out.append({"role": "assistant", "content": rec["assistant"].strip(), "t": rec["t"]})
+    return out
+
+
+def history_messages(sid):
+    if not _valid_session_id(sid):
+        return []
+    return _messages_from_records(history_records(), sid)
+
+
+def _truncate(text, size):
+    text = " ".join(text.split())
+    return text[:size]
+
+
+def history_sessions():
+    sessions = {}
+    for rec in history_records():
+        sid = rec["session"]
+        session = sessions.get(sid)
+        if session is None:
+            session = {"id": sid, "title": "", "updated": 0.0, "turns": 0, "preview": ""}
+            sessions[sid] = session
+        session["updated"] = max(session["updated"], rec["t"])
+        session["turns"] += 1
+        if not session["title"] and rec["user"].strip():
+            session["title"] = _truncate(rec["user"], 60)
+        if rec["assistant"].strip():
+            session["preview"] = _truncate(rec["assistant"], 100)
+    return sorted(sessions.values(), key=lambda s: s["updated"], reverse=True)
+
+
+def current_session():
+    global CURRENT_SESSION
+    with HIST_LOCK:
+        if not CURRENT_SESSION:
+            CURRENT_SESSION = secrets.token_hex(6)
+        return CURRENT_SESSION
+
+
+def _history_snapshot():
+    """Retourne (session courante, copie de HISTORY) sous HIST_LOCK."""
+    with HIST_LOCK:
+        return CURRENT_SESSION, [dict(m) for m in HISTORY]
+
+
 def restore_history(n=6):
+    global CURRENT_SESSION
+    sessions = history_sessions()
+    if sessions:
+        sid = sessions[0]["id"]
+        messages = history_messages(sid)[-20:]
+        normalized = normalize([{"role": m["role"], "content": m["content"]} for m in messages])
+        with HIST_LOCK:
+            CURRENT_SESSION = sid
+            HISTORY[:] = normalized
+        return
     ev = [e for e in journal_read() if e["kind"] in ("user", "tars")][-n * 2:]
     msgs = [{"role": "user" if e["kind"] == "user" else "assistant", "content": e["text"]} for e in ev]
     with HIST_LOCK:
         HISTORY[:] = normalize(msgs)
+        CURRENT_SESSION = secrets.token_hex(6)
+
+
+def history_append(sid, user, assistant, replace=False):
+    if not _valid_session_id(sid):
+        return False
+    if not str(assistant).strip():
+        return False
+    rec = {
+        "session": sid,
+        "t": time.time(),
+        "user": str(user),
+        "assistant": str(assistant),
+    }
+    line = json.dumps(rec, ensure_ascii=False) + "\n"
+    with HISTORY_FILE_LOCK:
+        if replace:
+            records = _read_history_locked()
+            for i in range(len(records) - 1, -1, -1):
+                if records[i]["session"] == sid and records[i]["user"] == rec["user"]:
+                    del records[i]
+                    break
+            records.append(rec)
+            if len(records) > HISTORY_MAX_RECORDS:
+                records = records[-HISTORY_MAX_RECORDS:]
+            _atomic_write(HISTORY_FILE, "".join(
+                json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+        else:
+            with HISTORY_FILE.open("a", encoding="utf-8") as f:
+                f.write(line)
+            try:
+                os.chmod(HISTORY_FILE, 0o600)
+            except OSError:
+                pass
+            try:
+                count = HISTORY_FILE.read_text("utf-8", errors="replace").count("\n")
+            except OSError:
+                count = 0
+            if count > HISTORY_MAX_RECORDS:
+                records = _read_history_locked()[-HISTORY_MAX_RECORDS:]
+                _atomic_write(HISTORY_FILE, "".join(
+                    json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+    return True
+
+
+def history_open(sid):
+    global CURRENT_SESSION, TURN_GEN
+    if not _valid_session_id(sid):
+        return None
+    current, snapshot = _history_snapshot()
+    if sid == current:
+        return snapshot
+    records = history_records()
+    if not any(rec["session"] == sid for rec in records):
+        return None
+    messages = _messages_from_records(records, sid)[-20:]
+    normalized = normalize([{"role": m["role"], "content": m["content"]} for m in messages])
+    while normalized and normalized[0]["role"] != "user":
+        normalized.pop(0)
+    with HIST_LOCK:
+        if CURRENT_SESSION == sid:
+            return [dict(m) for m in HISTORY]
+        CURRENT_SESSION = sid
+        HISTORY[:] = normalized
+        TURN_GEN += 1
+    return normalized
+
+
+def history_new():
+    global CURRENT_SESSION, TURN_GEN
+    sid = secrets.token_hex(6)
+    with HIST_LOCK:
+        CURRENT_SESSION = sid
+        HISTORY[:] = []
+        TURN_GEN += 1
+    return sid
 
 
 def begin_turn(text):
@@ -355,10 +931,28 @@ def begin_turn(text):
     with HIST_LOCK:
         TURN_GEN += 1
         prev = list(HISTORY)
+        if HISTORY and HISTORY[-1]["role"] == "user":
+            HISTORY.pop()
         HISTORY[:] = normalize(HISTORY + [{"role": "user", "content": text}])[-20:]
         while HISTORY and HISTORY[0]["role"] != "user":
             HISTORY.pop(0)
         return TURN_GEN, prev, list(HISTORY)
+
+
+def begin_regenerate():
+    global TURN_GEN
+    with HIST_LOCK:
+        if len(HISTORY) < 2:
+            return None
+        if HISTORY[-2]["role"] != "user" or HISTORY[-1]["role"] != "assistant":
+            return None
+        TURN_GEN += 1
+        prev = list(HISTORY)
+        messages = [dict(m) for m in HISTORY[:-1]][-20:]
+        while messages and messages[0]["role"] != "user":
+            messages.pop(0)
+        HISTORY[:] = messages
+        return TURN_GEN, prev, [dict(m) for m in messages]
 
 
 def is_current(gen):
@@ -634,6 +1228,103 @@ def pop_sentences(buf, first):
     return [s for s in out if s], buf, first
 
 
+# ---------- Synthèse locale Piper ----------
+
+def _piper_model_path():
+    if not PIPER_MODEL:
+        return None
+    model = Path(PIPER_MODEL)
+    if not model.is_absolute():
+        model = ROOT / model
+    return model
+
+
+def _piper_bin_path():
+    if not PIPER_BIN:
+        return None
+    found = shutil.which(PIPER_BIN)
+    if found:
+        return Path(found)
+    candidate = Path(PIPER_BIN)
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    return candidate if candidate.is_file() else None
+
+
+def piper_status():
+    model = _piper_model_path()
+    binary = _piper_bin_path()
+    available = bool(model is not None and model.is_file() and binary is not None)
+    return {
+        "available": available,
+        "model": model.name if model is not None else "",
+        "bin": binary.name if binary is not None else "",
+    }
+
+
+def _tts_cache_key(text, model):
+    try:
+        mtime = model.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    raw = (text + "\0" + str(model) + "\0" + repr(mtime)).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _tts_prune(cache):
+    try:
+        files = [p for p in cache.glob("*.wav") if p.is_file()]
+        if len(files) <= TTS_CACHE_MAX:
+            return
+        files.sort(key=lambda p: p.stat().st_mtime)
+        for old in files[:-TTS_CACHE_MAX]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+# ---------- Diagnostic ----------
+
+def _providers_snapshot():
+    out, seen = [], set()
+    for name in PROVIDERS:
+        if name in seen or name not in _STREAMS:
+            continue
+        seen.add(name)
+        if name == "groq":
+            out.append({"name": name, "configured": bool(GROQ_API_KEY), "model": GROQ_MODEL})
+        elif name == "mistral":
+            out.append({"name": name, "configured": bool(MISTRAL_API_KEY), "model": MISTRAL_MODEL})
+        elif name == "anthropic":
+            out.append({"name": name, "configured": bool(API_KEY), "model": MODEL})
+    return out
+
+
+def diagnostic_snapshot():
+    providers = _providers_snapshot()
+    configured = [p["name"] for p in providers if p["configured"]]
+    active = configured[0] if configured else ("mock" if MOCK else None)
+    sessions = history_sessions()
+    return {
+        "server": {"ok": True},
+        "auth": {"ok": bool(TOKEN)},
+        "llm": {
+            "ok": bool(MOCK or GROQ_API_KEY or MISTRAL_API_KEY or API_KEY),
+            "active": active,
+            "mock": bool(MOCK),
+            "providers": providers,
+        },
+        "stt": {"ok": bool(GROQ_API_KEY), "model": STT_MODEL},
+        "tts": {"piper": piper_status(), "fallbacks": ["web", "android"]},
+        "memory": {"count": len(memory_items())},
+        "history": {"sessions": len(sessions), "current": current_session()},
+        "last_error": last_error_snapshot(),
+    }
+
+
 # ---------- HTTP ----------
 
 class Handler(BaseHTTPRequestHandler):
@@ -798,6 +1489,7 @@ class Handler(BaseHTTPRequestHandler):
             save_secrets(updates)
         except OSError as e:
             print(f"[CONFIG] écriture secrets.json impossible : {e}", file=sys.stderr)
+            record_error("config", f"écriture secrets.json impossible : {e}")
             return self._err(500, "configuration non enregistrée")
         out = {"status": "ok"}
         out.update(config_snapshot())
@@ -816,8 +1508,144 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(500, "design non enregistré")
         self._send(200, json.dumps({"design": design}))
 
+    def _handle_memory_post(self, data):
+        action = data.get("action")
+        if action == "add":
+            text = _clean_fact_text(data.get("text"))
+            if text is None:
+                return self._err(400, "texte invalide")
+            try:
+                item = memory_add(text)
+            except (OSError, UnicodeError) as e:
+                record_error("memory", f"écriture des faits impossible : {e}")
+                return self._err(500, "mémoire non enregistrée")
+            if item is None:
+                return self._err(400, "texte invalide")
+            return self._send(200, json.dumps({"status": "ok", "fact": item}, ensure_ascii=False))
+        if action == "update":
+            fid = data.get("id")
+            text = _clean_fact_text(data.get("text"))
+            if not _valid_fact_id(fid) or text is None:
+                return self._err(400, "identifiant ou texte invalide")
+            try:
+                item = memory_update(fid, text)
+            except (OSError, UnicodeError) as e:
+                record_error("memory", f"écriture des faits impossible : {e}")
+                return self._err(500, "mémoire non enregistrée")
+            if item is None:
+                if not any(existing["id"] == fid for existing in memory_items()):
+                    return self._err(404, "fait introuvable")
+                return self._err(400, "doublon")
+            return self._send(200, json.dumps({"status": "ok", "fact": item}, ensure_ascii=False))
+        if action == "delete":
+            fid = data.get("id")
+            if not _valid_fact_id(fid):
+                return self._err(400, "identifiant invalide")
+            try:
+                deleted = memory_delete(fid)
+            except (OSError, UnicodeError) as e:
+                record_error("memory", f"écriture des faits impossible : {e}")
+                return self._err(500, "mémoire non enregistrée")
+            if not deleted:
+                return self._err(404, "fait introuvable")
+            return self._send(200, json.dumps({"status": "ok"}))
+        if action == "clear":
+            try:
+                memory_clear()
+            except (OSError, UnicodeError) as e:
+                record_error("memory", f"écriture des faits impossible : {e}")
+                return self._err(500, "mémoire non enregistrée")
+            return self._send(200, json.dumps({"status": "ok"}))
+        return self._err(400, "action invalide")
+
+    def _handle_tts(self, data):
+        text = data.get("text")
+        if not isinstance(text, str):
+            return self._err(400, "texte invalide")
+        text = text.strip()
+        if not text:
+            return self._err(400, "texte vide")
+        if len(text) > MAX_TTS:
+            return self._err(400, "texte trop long")
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            return self._err(400, "texte invalide")
+        if not piper_status()["available"]:
+            return self._err(503, "voix locale indisponible")
+        model = _piper_model_path()
+        binary = _piper_bin_path()
+        key = _tts_cache_key(text, model)
+        cache = TTS_CACHE
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(cache, 0o700)
+            except OSError:
+                pass
+        except OSError as e:
+            record_error("tts", f"dossier de cache indisponible : {e}")
+            return self._err(502, "synthèse locale indisponible")
+
+        with TTS_LOCK:
+            out = cache / (key + ".wav")
+            try:
+                if out.is_file():
+                    return self._send(200, out.read_bytes(), "audio/wav", no_store=True)
+            except OSError:
+                pass
+            tmp = cache / (key + ".part.wav")
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            try:
+                proc = subprocess.run(
+                    [str(binary), "--model", str(model), "--output_file", str(tmp)],
+                    input=text.encode("utf-8"),
+                    timeout=30,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+            except subprocess.TimeoutExpired:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                record_error("tts", "délai de synthèse dépassé")
+                return self._err(502, "synthèse locale indisponible")
+            except OSError as e:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                record_error("tts", f"exécution piper impossible : {e}")
+                return self._err(502, "synthèse locale indisponible")
+            if proc.returncode != 0 or not tmp.is_file():
+                detail = (proc.stderr or b"")[:200].decode("utf-8", "replace").strip()
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                record_error("tts", detail or f"piper code {proc.returncode}")
+                return self._err(502, "synthèse locale indisponible")
+            try:
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, out)
+                wav = out.read_bytes()
+            except OSError as e:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                record_error("tts", f"écriture du cache impossible : {e}")
+                return self._err(502, "synthèse locale indisponible")
+            _tts_prune(cache)
+            return self._send(200, wav, "audio/wav", no_store=True)
+
     def _handle_stt(self):
         if not GROQ_API_KEY:
+            record_error("stt", "clé Groq absente")
             return self._err(503, "clé Groq requise pour la transcription")
         raw_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         ext = _AUDIO_TYPES.get(raw_type)
@@ -861,13 +1689,16 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             msg = e.read().decode("utf-8", "replace")[:300]
             print(f"[STT] Groq {e.code}: {msg}", file=sys.stderr)
+            record_error("stt", f"Groq {e.code}: {msg}")
             return self._err(502, "transcription indisponible")
         except (urllib.error.URLError, OSError, ValueError) as e:
             print(f"[STT] Groq: {e}", file=sys.stderr)
+            record_error("stt", f"Groq: {e}")
             return self._err(502, "transcription indisponible")
         text = payload.get("text") if isinstance(payload, dict) else None
         if not isinstance(text, str):
             print("[STT] réponse Groq invalide", file=sys.stderr)
+            record_error("stt", "réponse Groq invalide")
             return self._err(502, "transcription indisponible")
         self._send(200, json.dumps({"text": text}, ensure_ascii=False))
 
@@ -914,6 +1745,54 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth():
                 return self._err(401, "token")
             self._send(200, json.dumps(config_snapshot()), no_store=True)
+        elif path == "/diagnostic":
+            if not self._origin_ok():
+                return self._err(403, "accès refusé")
+            if not self._auth():
+                return self._err(401, "token")
+            self._send(200, json.dumps(diagnostic_snapshot(), ensure_ascii=False), no_store=True)
+        elif path == "/memory":
+            if not self._origin_ok():
+                return self._err(403, "accès refusé")
+            if not self._auth():
+                return self._err(401, "token")
+            items = memory_items()
+            self._send(200, json.dumps({"facts": items, "count": len(items)}, ensure_ascii=False),
+                       no_store=True)
+        elif path == "/memory/export":
+            if not self._origin_ok():
+                return self._err(403, "accès refusé")
+            if not self._auth():
+                return self._err(401, "token")
+            self._send(
+                200, memory_export(), "text/markdown; charset=utf-8", no_store=True,
+                headers={"Content-Disposition": 'attachment; filename="tars-memoire.md"'})
+        elif path == "/history":
+            if not self._origin_ok():
+                return self._err(403, "accès refusé")
+            if not self._auth():
+                return self._err(401, "token")
+            self._send(200, json.dumps({"current": current_session(), "sessions": history_sessions()},
+                                       ensure_ascii=False), no_store=True)
+        elif path.startswith("/history/"):
+            if not self._origin_ok():
+                return self._err(403, "accès refusé")
+            if not self._auth():
+                return self._err(401, "token")
+            sid = path[len("/history/"):]
+            if not _valid_session_id(sid):
+                return self._err(404, "introuvable")
+            current, snapshot = _history_snapshot()
+            if sid == current:
+                self._send(200, json.dumps({"id": sid, "messages": snapshot[-20:]},
+                                           ensure_ascii=False), no_store=True)
+                return
+            records = history_records()
+            if not any(rec["session"] == sid for rec in records):
+                return self._err(404, "introuvable")
+            messages = _messages_from_records(records, sid)[-20:]
+            self._send(200, json.dumps({"id": sid, "messages": messages},
+                                       ensure_ascii=False), no_store=True)
         elif path == "/widget":
             # Endpoint public pour les widgets (statut et réglages uniquement)
             self._send(200, json.dumps(widget_state()), no_store=True)
@@ -926,12 +1805,16 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard(check_origin=True):
             return
         path = urlparse(self.path).path
-        if path not in ("/chat", "/status", "/config", "/stt", "/design"):
+        allowed = ("/chat", "/status", "/config", "/stt", "/design", "/tts", "/memory",
+                   "/history/open", "/history/new")
+        if path not in allowed:
             return self._err(404, "introuvable")
         if not self._auth():
             return self._err(401, "token")
         if path == "/stt":
             return self._handle_stt()
+        if path == "/history/new":
+            return self._send(200, json.dumps({"id": history_new()}))
         data = self._read_json()
         if data is None:
             return
@@ -942,6 +1825,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/design":
             return self._handle_design_post(data)
 
+        if path == "/memory":
+            return self._handle_memory_post(data)
+
+        if path == "/tts":
+            return self._handle_tts(data)
+
+        if path == "/history/open":
+            sid = data.get("id")
+            if not _valid_session_id(sid):
+                return self._err(400, "identifiant invalide")
+            messages = history_open(sid)
+            if messages is None:
+                return self._err(404, "session introuvable")
+            self._send(200, json.dumps({"id": sid, "messages": messages}, ensure_ascii=False))
+            return
+
         if path == "/status":
             st = data.get("status")
             if st not in STATUSES:
@@ -951,17 +1850,41 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Gestion de /chat
-        text = data.get("text")
-        if not isinstance(text, str):
-            return self._err(400, "texte invalide")
-        text = text.strip()
-        if not text:
-            return self._err(400, "texte vide")
-        if len(text) > MAX_TEXT:
-            text = text[:MAX_TEXT]
-
-        set_status("thinking")
-        gen, prev, messages = begin_turn(text)
+        sid = current_session()
+        regenerate = data.get("regenerate") is True
+        if regenerate:
+            wanted = data.get("session")
+            if wanted is not None:
+                if not _valid_session_id(wanted) or wanted != sid:
+                    return self._err(409, "session obsolète")
+            started = begin_regenerate()
+            if started is None:
+                return self._err(409, "rien à régénérer")
+            gen, prev, messages = started
+            text = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
+            if not text:
+                rollback(gen, prev)
+                return self._err(409, "rien à régénérer")
+            if current_session() != sid:
+                rollback(gen, prev)
+                return self._err(409, "session obsolète")
+            expected_user = data.get("user")
+            if expected_user is not None:
+                if not isinstance(expected_user, str) or text.strip() != expected_user.strip():
+                    rollback(gen, prev)
+                    return self._err(409, "rien à régénérer")
+            set_status("thinking")
+        else:
+            text = data.get("text")
+            if not isinstance(text, str):
+                return self._err(400, "texte invalide")
+            text = text.strip()
+            if not text:
+                return self._err(400, "texte vide")
+            if len(text) > MAX_TEXT:
+                text = text[:MAX_TEXT]
+            set_status("thinking")
+            gen, prev, messages = begin_turn(text)
 
         # Initialiser la réponse HTTP pour le streaming SSE
         self.send_response(200)
@@ -973,13 +1896,16 @@ class Handler(BaseHTTPRequestHandler):
         reply, buf, first = "", "", True
         try:
             settings = load_settings()
-            changes = parse_settings(text)
-            if changes:
-                settings.update(changes)
-                save_settings(settings)
-            fact = parse_fact(text)
-            if fact:
-                journal_add("fact", fact)
+            if regenerate:
+                changes = {}
+            else:
+                changes = parse_settings(text)
+                if changes:
+                    settings.update(changes)
+                    save_settings(settings)
+                fact = parse_fact(text)
+                if fact:
+                    journal_add("fact", fact)
 
             for chunk in stream_llm(system_prompt(settings, changes), messages):
                 reply += chunk
@@ -992,6 +1918,7 @@ class Handler(BaseHTTPRequestHandler):
         except RuntimeError as e:
             rollback(gen, prev)
             print(f"[CHAT] fournisseur indisponible : {e}", file=sys.stderr)
+            record_error("chat", str(e))
             try:
                 self._emit({"error": "provider", "s": "Liaison coupée, commandant. Je ne peux pas joindre le cerveau."})
             except ConnectionError:
@@ -1001,6 +1928,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             rollback(gen, prev)
             print(f"[CHAT] erreur interne : {e!r}", file=sys.stderr)
+            record_error("chat", repr(e))
             try:
                 self._emit({"error": "internal", "s": "Erreur critique, commandant."})
             except ConnectionError:
@@ -1009,10 +1937,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if not finish_turn(gen, reply):
-            with HIST_LOCK:
-                if HISTORY and HISTORY[-1]["role"] == "user" and HISTORY[-1]["content"] == text:
-                    HISTORY.pop()
             return  # un tour plus récent a pris la main
+
+        try:
+            history_append(sid, text, reply.strip(), replace=regenerate)
+        except (OSError, UnicodeError) as e:
+            print(f"[HISTORY] écriture history.jsonl impossible : {e}", file=sys.stderr)
+            record_error("history", f"écriture history.jsonl impossible : {e}")
 
         set_status("off")
         try:
@@ -1044,7 +1975,19 @@ class TarsServer(ThreadingHTTPServer):
 
 def consolidate():
     since = read_mark()
-    ev = [e for e in journal_read() if e["t"] > since and e["kind"] in ("fact", "user", "tars")]
+    meta = _load_facts_meta()
+    tombstones = set(meta["tombstones"])
+    epoch = meta["cleared_at"]
+    ev = []
+    for e in journal_read():
+        if e["t"] <= since or e["t"] <= epoch:
+            continue
+        if e["kind"] != "fact":
+            continue
+        key = _tombstone_key(e["text"])
+        if key is None or key in tombstones:
+            continue
+        ev.append(e)
     if not ev:
         print("Rien de nouveau dans le journal.")
         return
@@ -1052,11 +1995,22 @@ def consolidate():
         old = FACTS.read_text("utf-8")
     except OSError:
         old = ""
+    old_lines = []
+    for line in old.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            key = _tombstone_key(stripped[2:])
+            if key is None or key in tombstones:
+                continue
+        old_lines.append(line)
+    old = "\n".join(old_lines)
     
     # Préparer le log des nouveaux faits
     log = "\n".join(f"[{e['kind']}] {e['text']}" for e in ev)
     ev_facts = [e for e in ev if e["kind"] == "fact"]
     new_facts = "\n".join(f"- {e['text']}" for e in ev_facts)
+    old_bullets = "\n".join(
+        line.strip() for line in old.splitlines() if line.strip().startswith("- "))
     
     # Si on a Groq, Mistral ou Anthropic, utiliser l'API pour consolider
     if GROQ_API_KEY:
@@ -1069,7 +2023,7 @@ def consolidate():
             out = "".join(_stream_groq("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Groq échoué: {e}. Passage en mode manuel.")
-            out = old + ("\n" + new_facts if old.strip() else new_facts)
+            out = old_bullets + ("\n" + new_facts if old_bullets else new_facts)
     elif MISTRAL_API_KEY:
         try:
             prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
@@ -1080,7 +2034,7 @@ def consolidate():
             out = "".join(_stream_mistral("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Mistral échoué: {e}. Passage en mode manuel.")
-            out = old + ("\n" + new_facts if old.strip() else new_facts)
+            out = old_bullets + ("\n" + new_facts if old_bullets else new_facts)
     elif API_KEY:
         try:
             prompt = ("Voici la liste actuelle des faits sur le commandant, puis le journal récent.\n"
@@ -1091,29 +2045,54 @@ def consolidate():
             out = "".join(_stream_anthropic("Tu es un archiviste rigoureux.", [{"role": "user", "content": prompt}], CONSOLIDATE_CHUNK)).strip()
         except Exception as e:
             print(f"[CONSOLIDATE] Anthropic échoué: {e}. Passage en mode manuel.")
-            out = old + ("\n" + new_facts if old.strip() else new_facts)
+            out = old_bullets + ("\n" + new_facts if old_bullets else new_facts)
     else:
         # Mode manuel : ajouter les nouveaux faits à l'ancien, sans doublon
         if not ev_facts:
             print("Rien de nouveau à consolider en mode manuel.")
             return
         lignes, vus = [], set()
-        for ligne in old.splitlines() + [f"- {e['text']}" for e in ev_facts]:
+        for ligne in old.splitlines():
+            stripped = ligne.strip()
+            if not stripped.startswith("- "):
+                continue
+            cle = stripped.lower()
+            if cle not in vus:
+                vus.add(cle)
+                lignes.append(stripped)
+        for e in ev_facts:
+            ligne = f"- {e['text']}"
             cle = ligne.strip().lower()
-            if cle and cle not in vus:
+            if cle not in vus:
                 vus.add(cle)
                 lignes.append(ligne)
         out = "\n".join(lignes)
     
-    if not out.startswith("-"):
+    lines, seen = [], set()
+    for raw in out.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith("- "):
+            continue
+        text = _clean_fact_text(stripped[2:].strip()[:MAX_FACT])
+        if text is None:
+            continue
+        key = text.lower()
+        if key in tombstones or key in seen:
+            continue
+        seen.add(key)
+        lines.append("- " + text)
+    if not lines:
         print("Réponse inattendue du modèle, facts.md non modifié.")
         return
+    out = "\n".join(lines)
     
     # Sauvegarde de sécurité
     if FACTS.exists():
         shutil.copy2(FACTS, FACTS_BAK)
     
-    _atomic_write(FACTS, out + "\n")
+    if sync_memory_from_lines(out.splitlines(), expected_cleared_at=epoch) is None:
+        print("Mémoire effacée pendant la consolidation, écriture abandonnée.")
+        return
     MARK.write_text(str(max(e["t"] for e in ev)), encoding="utf-8")
     print(f"{len(ev)} événements consolidés -> {FACTS}")
 

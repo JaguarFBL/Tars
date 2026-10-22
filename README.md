@@ -160,8 +160,12 @@ Voir : [windows/README.md](windows/README.md)
 
 ### Frontend (index.html)
 - **Interface minimaliste** : Bouton monolithe, affichage des messages
+- **Diagnostic** : « Tester TARS » vérifie serveur, auth, cerveau, fournisseurs, STT, Piper, mémoire et historique
+- **Mémoire éditable** : ajout, modification inline, suppression, export Markdown
+- **Historique** : reprise de session, recherche, export Markdown et régénération de la dernière réponse
+- **Voix locale Piper** : lecture phrase par phrase, cache navigateur et repli automatique vers la voix système
 - **Reconnaissance vocale** : Web Speech API (Chrome/Edge)
-- **Synthèse vocale** : Web Speech API (voix robotique)
+- **Synthèse vocale** : Piper si configuré, sinon Web Speech API (voix robotique)
 - **Streaming** : Réception des réponses en temps réel
 - **Barge-in** : Interruption si l'utilisateur parle pendant la réponse
 - **Accusés de réception** : Clips audio ou synthèse vocale
@@ -188,6 +192,8 @@ Voir : [windows/README.md](windows/README.md)
 | `TARS_HOST` | Hôte du serveur | `127.0.0.1` | Non |
 | `TARS_PORT` | Port d'écoute ; `8000` en manuel, `0` = port aléatoire (Android/Electron) | `8000` | Non |
 | `TARS_MOCK` | Mode mock | `0` | Non |
+| `TARS_PIPER_BIN` | Binaire Piper (chemin ou nom dans le `PATH`) | `piper` | Non |
+| `TARS_PIPER_MODEL` | Modèle Piper `.onnx` ; vide = synthèse locale désactivée | - | Non |
 
 ### Exemple
 ```bash
@@ -343,6 +349,27 @@ Polices embarquées dans `static/fonts/` (SIL OFL, via @fontsource) : l'interfac
 **Réglages → Voix** : préréglage TARS (grave, lente, sans émotion), voix du système et sliders
 hauteur/débit (stockés dans le navigateur). Le texte est « mis à plat » avant lecture
 (pas de `!`, d'emoji ni de markdown). Sous Android, le pont `NativeTTS.setVoice(pitch, rate)` applique les mêmes réglages.
+
+### Diagnostic, mémoire et historique
+
+- **Diagnostic → Tester TARS** interroge `GET /diagnostic` et affiche l'état du serveur, de
+  l'authentification, du cerveau actif (réel ou mock), des fournisseurs configurés, du STT,
+  de Piper, du nombre de faits, des sessions et de la dernière erreur. Aucun secret n'est affiché.
+- **Ce que TARS sait** liste les faits (`GET /memory`) avec leur date et leur source. Les faits
+  s'ajoutent, se modifient inline, se suppriment et s'exportent en Markdown. Toute mutation est
+  immédiatement répercutée côté serveur (`POST /memory`).
+- **Historique** liste les sessions (`GET /history`), permet de les rechercher, d'en ouvrir une
+  (`POST /history/open`), d'en créer une nouvelle (`POST /history/new`), d'exporter la conversation
+  courante en Markdown et de régénérer la dernière réponse (`POST /chat {"regenerate":true}`).
+
+### Voix locale Piper
+
+Avec `TARS_PIPER_BIN` et `TARS_PIPER_MODEL` configurés, la case **Voix locale Piper** est activée
+par défaut et fait passer chaque phrase par `POST /tts`. Les WAV sont mis en cache dans le navigateur
+(taille bornée) et lus dans l'ordre. Si Piper est indisponible (503/502, réseau, lecture bloquée), TARS
+bascule immédiatement sur la voix système ou Android TTS et cesse de réessayer pour la session.
+« Tester la voix » teste le chemin choisi puis bascule si nécessaire. Une interruption
+(`interrupt()`) annule les requêtes, vide la file et arrête l'audio sans déclencher de repli.
 
 Après modification de `index.html` ou `Tars.py`, recopier vers `android/www/`, `windows/` et
 `android/app/src/main/python/` (copies identiques).

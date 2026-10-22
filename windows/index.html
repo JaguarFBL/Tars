@@ -175,6 +175,42 @@ body.widget-mode #slab i { width: 12px; height: 100% !important; border: 0 !impo
 body.widget-mode #slab { align-self: center; }
 body.embedded main { padding: 14px; }
 
+/* ---------- Sections repliables des réglages ---------- */
+.settings-block { border-top: 1px solid var(--line); padding-top: 8px; }
+.settings-block > summary { cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 0; list-style: none; font: 600 12px var(--f-body); color: var(--soft); letter-spacing: .06em; text-transform: uppercase; }
+.settings-block > summary::-webkit-details-marker { display: none; }
+.settings-block > summary::after { content: " +"; margin-left: auto; }
+.settings-block[open] > summary::after { content: " –"; }
+.settings-block > summary .count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--soft); }
+.block-body { display: grid; gap: 10px; padding-top: 6px; }
+.settings-status.err { color: var(--err); }
+#settings .toggle { display: flex; align-items: center; gap: 8px; font: 500 13px var(--f-body); color: var(--text); letter-spacing: 0; text-transform: none; }
+#settings .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+#settings input[type="search"], #settings textarea { width: 100%; padding: 10px; background: transparent; border: 1px solid var(--line-2); border-radius: var(--r); font: 500 13px/1.4 var(--f-body); resize: vertical; }
+.memory-form { display: flex; gap: 8px; align-items: stretch; }
+.memory-form input { flex: 1; min-width: 0; }
+.mem-list { display: grid; gap: 8px; max-height: 300px; overflow-y: auto; }
+.mem-empty, .hist-empty { font: 500 13px var(--f-body); color: var(--soft); }
+.mem-item { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); }
+.mem-text { font: 500 13px/1.4 var(--f-body); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.mem-meta { display: flex; justify-content: space-between; gap: 8px; font: 500 11px var(--f-body); color: var(--soft); }
+.mem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mem-actions .ghost { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.hist-list { display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+.hist-item { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); }
+.hist-item.current { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.hist-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.hist-title { font: 600 13px var(--f-body); overflow-wrap: anywhere; }
+.hist-badge { font: 600 10px var(--f-body); color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+.hist-meta { font: 500 11px var(--f-body); color: var(--soft); }
+.hist-preview { font: 500 12px/1.35 var(--f-body); color: var(--soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.hist-open { justify-self: start; min-height: 30px; padding: 0 10px; font-size: 12px; }
+.diag-list { display: grid; gap: 4px; font: 500 12px/1.45 var(--f-body); }
+.diag-line { display: grid; grid-template-columns: 108px 1fr; gap: 8px; }
+.diag-line .diag-key { color: var(--soft); }
+.diag-line .diag-val { overflow-wrap: anywhere; }
+.diag-line .diag-val.bad { color: var(--err); }
+
 ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; animation-delay: 0s !important; }
@@ -219,8 +255,52 @@ body.embedded main { padding: 14px; }
       <div class="settings-row"><select id="voice-pick" aria-label="Voix du système"></select></div>
       <div class="range-row"><label for="voice-pitch">Hauteur</label><input type="range" id="voice-pitch" min="0" max="1.2" step="0.05"><output id="voice-pitch-v"></output></div>
       <div class="range-row"><label for="voice-rate">Débit</label><input type="range" id="voice-rate" min="0.6" max="1.3" step="0.05"><output id="voice-rate-v"></output></div>
+      <div class="settings-row">
+        <label class="toggle" for="piper-enabled"><input type="checkbox" id="piper-enabled"><span>Voix locale Piper</span></label>
+        <p id="piper-status" class="settings-status" role="status" aria-live="polite">Piper : vérification…</p>
+      </div>
       <div class="settings-actions"><button id="voice-test" class="ghost" type="button">Tester la voix</button></div>
     </section>
+    <details class="settings-block" id="diag-block">
+      <summary>Diagnostic</summary>
+      <div class="block-body">
+        <div class="settings-actions">
+          <button id="diag-run" class="ghost" type="button">Tester TARS</button>
+          <span id="diag-status" class="settings-status" role="status" aria-live="polite"></span>
+        </div>
+        <div id="diag-lines" class="diag-list" aria-live="polite"></div>
+      </div>
+    </details>
+    <details class="settings-block" id="memory-block">
+      <summary>Ce que TARS sait <span id="memory-count" class="count">0</span></summary>
+      <div class="block-body">
+        <form id="memory-form" class="memory-form" autocomplete="off">
+          <input type="text" id="memory-input" maxlength="500" placeholder="Ajouter un fait…" aria-label="Nouveau fait">
+          <button class="ghost" type="submit">Ajouter</button>
+        </form>
+        <div class="settings-actions">
+          <button id="memory-refresh" class="ghost" type="button">Actualiser</button>
+          <button id="memory-export" class="ghost" type="button">Exporter</button>
+          <button id="memory-clear" class="clear" type="button">Tout effacer</button>
+        </div>
+        <p id="memory-status" class="settings-status" role="status" aria-live="polite"></p>
+        <div id="memory-list" class="mem-list"></div>
+      </div>
+    </details>
+    <details class="settings-block" id="history-block">
+      <summary>Historique <span id="history-count" class="count">0</span></summary>
+      <div class="block-body">
+        <div class="settings-actions">
+          <button id="history-new" class="ghost" type="button">Nouvelle session</button>
+          <button id="history-refresh" class="ghost" type="button">Actualiser</button>
+          <button id="history-export" class="ghost" type="button">Exporter</button>
+          <button id="history-regen" class="ghost" type="button">Régénérer</button>
+        </div>
+        <input type="search" id="history-search" placeholder="Rechercher une session…" aria-label="Rechercher une session">
+        <p id="history-status" class="settings-status" role="status" aria-live="polite"></p>
+        <div id="history-list" class="hist-list"></div>
+      </div>
+    </details>
     <div class="settings-actions">
       <span id="groq-status" class="settings-status">Clé Groq : …</span>
       <button id="clear-key" class="clear" type="button">Effacer la clé</button>
@@ -275,6 +355,39 @@ let audioCtx = null, analyser = null, vadTimer = null, vadBuf = null;
 let speechSeen = false, lastVoiceAt = 0, recStartedAt = 0, noiseFloor = null;
 let recPending = false, srText = "", srFinalTimer = null;
 let isWidget = new URLSearchParams(location.search).has("widget");
+
+/* ---------- État conversation / historique ---------- */
+let conversation = [];
+let currentSessionId = "";
+let pendingTurn = null;
+let historySessions = [];
+let historyRefreshTimer = null;
+let memoryFacts = [];
+let memoryEditingId = null;
+let memoryLoading = false;
+let memoryReloadPending = false;
+
+/* ---------- Piper ---------- */
+let piperPref = null;
+let piperEnabled = false;
+let piperAvailable = null;
+let piperBroken = false;
+let piperQueue = [];
+let piperPlaying = false;
+let piperSeq = 0;
+let piperAudio = null;
+let piperTestAudio = null;
+const piperControllers = new Set();
+const piperCache = new Map();
+const PIPER_CACHE_MAX = 60;
+try {
+  const stored = localStorage.getItem("tars.piper");
+  if (stored === "1" || stored === "0") {
+    piperPref = stored === "1";
+    piperEnabled = piperPref;
+  }
+} catch (e) {}
+
 
 // Détecter si on est en mode embarqué
 const isEmbedded = (
@@ -445,25 +558,125 @@ function appendReply(sentence) {
   el.dataset.size = n <= 45 ? "xl" : n <= 110 ? "l" : "m";
 }
 
-/* ---------- Historique ---------- */
-function addToHistory(userText, tarsText) {
+/* ---------- Historique / conversation ---------- */
+function journalMessage(role, text) {
+  const para = document.createElement("p");
+  para.className = role === "assistant" ? "tars" : "user";
+  const strong = document.createElement("strong");
+  strong.textContent = role === "assistant" ? "TARS:" : "Toi:";
+  const body = document.createElement("span");
+  body.className = "jtext";
+  body.textContent = text || "";
+  para.appendChild(strong);
+  para.appendChild(document.createTextNode(" "));
+  para.appendChild(body);
+  return para;
+}
+
+function scrollJournal() {
   const historyDiv = $("#history");
-  if (userText) {
-    const userPara = document.createElement('p');
-    userPara.className = 'user';
-    userPara.innerHTML = '<strong>Toi:</strong> ';
-    userPara.appendChild(document.createTextNode(userText));
-    historyDiv.appendChild(userPara);
-  }
-  if (tarsText) {
-    const tarsPara = document.createElement('p');
-    tarsPara.className = 'tars';
-    tarsPara.innerHTML = '<strong>TARS:</strong> ';
-    tarsPara.appendChild(document.createTextNode(tarsText));
-    historyDiv.appendChild(tarsPara);
-  }
   historyDiv.scrollTop = historyDiv.scrollHeight;
 }
+
+function renderJournal() {
+  const historyDiv = $("#history");
+  historyDiv.textContent = "";
+  for (const message of conversation) {
+    historyDiv.appendChild(journalMessage(message.role, message.content));
+  }
+  scrollJournal();
+  let lastUser = "", lastTars = "";
+  for (const message of conversation) {
+    if (message.role === "user") lastUser = message.content;
+    else if (message.role === "assistant") lastTars = message.content;
+  }
+  $("#you").textContent = lastUser;
+  $("#tars").textContent = lastTars;
+  $("#tars").dataset.size = lastTars.length <= 45 ? "xl" : lastTars.length <= 110 ? "l" : "m";
+}
+
+function removeLastJournalAssistant() {
+  const nodes = $("#history").children;
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    if (nodes[i].classList && nodes[i].classList.contains("tars")) {
+      nodes[i].remove();
+      return;
+    }
+  }
+}
+
+function startPendingTurn(mode, userText) {
+  pendingTurn = {
+    mode, userText, assistant: "", tarsEl: null, userIndex: -1,
+    previousAssistant: null, previousRemoved: false, failed: false, settled: false,
+  };
+  return pendingTurn;
+}
+
+function ensurePendingAssistant(turn) {
+  if (turn.tarsEl) return turn.tarsEl;
+  turn.tarsEl = journalMessage("assistant", "");
+  $("#history").appendChild(turn.tarsEl);
+  return turn.tarsEl;
+}
+
+function setPendingAssistantText(turn, text) {
+  const el = ensurePendingAssistant(turn);
+  const body = el.querySelector(".jtext");
+  if (body) body.textContent = text;
+}
+
+function commitPendingTurn(turn) {
+  if (!turn || turn.settled) return;
+  turn.settled = true;
+  const text = turn.assistant.trim();
+  if (text) conversation.push({ role: "assistant", content: text });
+  if (pendingTurn === turn) pendingTurn = null;
+  scheduleHistoryRefresh();
+}
+
+function discardPendingTurn(turn) {
+  if (!turn || turn.settled) return;
+  turn.settled = true;
+  if (turn.mode === "send" && turn.userIndex >= 0) {
+    const current = conversation[turn.userIndex];
+    if (current && current.role === "user" && current.content === turn.userText) {
+      conversation.splice(turn.userIndex, 1);
+    }
+  }
+  if (turn.mode === "regenerate" && turn.previousRemoved && turn.previousAssistant) {
+    conversation.push(turn.previousAssistant);
+  }
+  if (pendingTurn === turn) pendingTurn = null;
+  renderJournal();
+}
+
+function scheduleHistoryRefresh() {
+  clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = setTimeout(() => { loadHistory({ silent: true }); }, 500);
+}
+
+function formatDate(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  const ms = n > 1e12 ? n : n * 1000;
+  const date = new Date(ms);
+  if (!Number.isFinite(date.getTime())) return "—";
+  try { return date.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }); }
+  catch (e) { return date.toLocaleString(); }
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 2000);
+}
+
 
 /* ---------- Synthèse vocale ---------- */
 const ACK_AUDIO = {
@@ -577,8 +790,7 @@ function syncVoiceUI() {
   $("#voice-rate-v").textContent = voicePrefs.rate.toFixed(2);
 }
 
-function speakTest() {
-  const text = "Honnêteté, quatre-vingt-dix pour cent. Je vous écoute, commandant.";
+function systemSpeakTest(text) {
   const vp = voiceParams();
   if (HAS_TTS) {
     window.speechSynthesis.cancel();
@@ -593,15 +805,213 @@ function speakTest() {
   }
 }
 
+function speakTest() {
+  const text = "Honnêteté, quatre-vingt-dix pour cent. Je vous écoute, commandant.";
+  if (streaming || pendingTurn) {
+    setPiperStatus("Test indisponible pendant la réponse", true);
+    return;
+  }
+  stopPiper();
+  pending = 0;
+  if (HAS_TTS && window.speechSynthesis) window.speechSynthesis.cancel();
+  if (window.NativeTTS && typeof window.NativeTTS.stop === "function") {
+    try { window.NativeTTS.stop(); } catch (e) {}
+  }
+  if (piperEnabled) {
+    piperBroken = false;
+    testPiper(text).then(ok => { if (!ok) systemSpeakTest(text); });
+    return;
+  }
+  systemSpeakTest(text);
+}
+
 if (HAS_TTS) {
   pickVoice();
   window.speechSynthesis.onvoiceschanged = pickVoice;
 }
 
+/* ---------- Piper : synthèse locale, cache et repli ---------- */
+function setPiperStatus(message, isError) {
+  const el = $("#piper-status");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("err", !!isError);
+  el.classList.toggle("ok", !isError && message.indexOf("indisponible") === -1 && /disponible|OK/i.test(message));
+}
+
+function setPiperAvailability(available) {
+  piperAvailable = typeof available === "boolean" ? available : null;
+  if (piperAvailable === true && piperPref === null && !piperEnabled) {
+    piperEnabled = true;
+    const box = $("#piper-enabled");
+    if (box) box.checked = true;
+  }
+  if (piperBroken) setPiperStatus("Piper indisponible — voix système", true);
+  else if (piperAvailable === true) setPiperStatus("Piper : disponible");
+  else if (piperAvailable === false) setPiperStatus(piperEnabled ? "Piper : indisponible (repli système)" : "Piper : indisponible", piperEnabled);
+  else setPiperStatus("Piper : inconnu");
+}
+
+function piperCachePut(text, url) {
+  if (piperCache.size >= PIPER_CACHE_MAX) {
+    const oldest = piperCache.keys().next().value;
+    const oldUrl = piperCache.get(oldest);
+    piperCache.delete(oldest);
+    if (oldUrl) { try { URL.revokeObjectURL(oldUrl); } catch (e) {} }
+  }
+  piperCache.set(text, url);
+}
+
+async function fetchPiperAudio(text, signal) {
+  const cached = piperCache.get(text);
+  if (cached) return cached;
+  const response = await fetch(`${apiBase()}/tts`, {
+    method: "POST",
+    credentials: "same-origin",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) {
+    let message = "HTTP " + response.status;
+    try {
+      const data = await response.json();
+      if (data && data.error) message = data.error;
+    } catch (e) {}
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  if (!blob || !blob.size) throw new Error("audio vide");
+  const url = URL.createObjectURL(blob);
+  piperCachePut(text, url);
+  return url;
+}
+
+function playPiperUrl(url, seq, test) {
+  return new Promise((resolve, reject) => {
+    if (seq !== piperSeq) { resolve(); return; }
+    const audio = new Audio(url);
+    if (test) piperTestAudio = audio;
+    else piperAudio = audio;
+    let finished = false;
+    const finish = ok => {
+      if (finished) return;
+      finished = true;
+      if (test) { if (piperTestAudio === audio) piperTestAudio = null; }
+      else if (piperAudio === audio) piperAudio = null;
+      if (ok) resolve();
+      else reject(new Error("lecture audio impossible"));
+    };
+    audio.onended = () => finish(true);
+    audio.onerror = () => finish(false);
+    const playback = audio.play();
+    if (playback && typeof playback.then === "function") {
+      playback.catch(() => { try { audio.pause(); } catch (e) {} finish(false); });
+    }
+  });
+}
+
+function settlePiper(item) {
+  if (!item || item.done) return;
+  item.done = true;
+  if (item.g !== gen) return;
+  pending = Math.max(0, pending - 1);
+  maybeResume();
+}
+
+function piperFlushToFallback(item) {
+  if (!item || item.done) return;
+  item.done = true;
+  if (item.g !== gen) return;
+  pending = Math.max(0, pending - 1);
+  piperBroken = true;
+  setPiperAvailability(piperAvailable === null ? false : piperAvailable);
+  const rest = piperQueue.splice(0);
+  fallbackTTS(item.text);
+  for (const other of rest) {
+    if (!other || other.done) continue;
+    other.done = true;
+    if (other.g !== gen) continue;
+    pending = Math.max(0, pending - 1);
+    fallbackTTS(other.text);
+  }
+}
+
+async function piperPump() {
+  if (piperPlaying) return;
+  const item = piperQueue.shift();
+  if (!item) return;
+  if (item.done) { piperPump(); return; }
+  if (item.g !== gen) { item.done = true; piperPump(); return; }
+  piperPlaying = true;
+  const seq = piperSeq;
+  const controller = new AbortController();
+  piperControllers.add(controller);
+  try {
+    const url = await fetchPiperAudio(item.text, controller.signal);
+    if (seq !== piperSeq || item.done) return;
+    await playPiperUrl(url, seq, false);
+    if (seq !== piperSeq) return;
+    settlePiper(item);
+  } catch (error) {
+    if (seq !== piperSeq || item.done) return;
+    if (error && error.name === "AbortError") return;
+    piperFlushToFallback(item);
+  } finally {
+    piperControllers.delete(controller);
+    if (seq === piperSeq) {
+      piperPlaying = false;
+      piperPump();
+    }
+  }
+}
+
+function piperEnqueue(text) {
+  if (!piperEnabled || piperBroken) { fallbackTTS(text); return; }
+  piperQueue.push({ text, g: gen, done: false });
+  pending++;
+  piperPump();
+}
+
+function stopPiper() {
+  piperSeq++;
+  for (const controller of piperControllers) { try { controller.abort(); } catch (e) {} }
+  piperControllers.clear();
+  piperQueue.length = 0;
+  if (piperAudio) { try { piperAudio.pause(); } catch (e) {} piperAudio = null; }
+  if (piperTestAudio) { try { piperTestAudio.pause(); } catch (e) {} piperTestAudio = null; }
+  piperPlaying = false;
+}
+
+async function testPiper(text) {
+  if (!piperEnabled) return false;
+  const seq = piperSeq;
+  const controller = new AbortController();
+  piperControllers.add(controller);
+  try {
+    const url = await fetchPiperAudio(text, controller.signal);
+    if (seq !== piperSeq) return true;
+    await playPiperUrl(url, seq, true);
+    piperAvailable = true;
+    piperBroken = false;
+    setPiperStatus("Piper : disponible");
+    return true;
+  } catch (error) {
+    if (seq !== piperSeq) return true;
+    piperBroken = true;
+    setPiperAvailability(false);
+    return false;
+  } finally {
+    piperControllers.delete(controller);
+  }
+}
+
 function say(text) {
   if (isWidget) return;
   const clean = deadpan(text);
-  if (clean) fallbackTTS(clean);
+  if (!clean) return;
+  if (piperEnabled && !piperBroken && piperAvailable !== false) piperEnqueue(clean);
+  else fallbackTTS(clean);
 }
 
 function playAck() {
@@ -971,6 +1381,8 @@ function maybeResume() {
 
 function interrupt(resume = true) {
   stopMonitor();
+  stopPiper();
+  if (pendingTurn) discardPendingTurn(pendingTurn);
   if (sttCtrl) { sttCtrl.abort(); sttCtrl = null; }
   gen++;
   pending = 0;
@@ -990,27 +1402,80 @@ function interrupt(resume = true) {
   }
 }
 
-function onEvent(ev, g) {
+function onEvent(ev, g, turn) {
   if (g !== gen) return;
   if (ev.s) {
+    if (turn) {
+      if (turn.mode === "regenerate" && !turn.tarsEl && turn.previousAssistant) {
+        const index = conversation.lastIndexOf(turn.previousAssistant);
+        if (index >= 0) conversation.splice(index, 1);
+        turn.previousRemoved = true;
+        removeLastJournalAssistant();
+      }
+      if (!turn.tarsEl) {
+        turn.tarsEl = journalMessage("assistant", "");
+        $("#history").appendChild(turn.tarsEl);
+      }
+      turn.assistant += (turn.assistant ? " " : "") + String(ev.s).trim();
+      const body = turn.tarsEl.querySelector(".jtext");
+      if (body) body.textContent = turn.assistant;
+      scrollJournal();
+    }
     if (!gotFirst) {
       gotFirst = true;
       clearTimeout(ackTimer);
       setState("speaking");
       startBargeMonitor();
-      addToHistory($("#you").textContent, ev.s);
-    } else {
-      addToHistory("", ev.s);
     }
     appendReply(ev.s);
     say(ev.s);
   }
   startBargeMonitor();
-  if (ev.error) note(ev.error, true);
+  if (ev.error) {
+    if (turn) turn.failed = true;
+    note(ev.error, true);
+  }
   if (ev.done && ev.settings) {
     settings = ev.settings;
     renderGauges();
   }
+}
+
+async function readChatStream(response, g, turn) {
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let index;
+    while ((index = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, index).trim();
+      buffer = buffer.slice(index + 1);
+      if (line) onEvent(JSON.parse(line), g, turn);
+    }
+  }
+}
+
+async function streamChatRequest(payload, g, turn) {
+  const response = await fetch(`${apiBase()}/chat`, {
+    method: "POST",
+    signal: ctrl.signal,
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    let message = "HTTP " + response.status;
+    try {
+      const data = await response.json();
+      if (data && data.error) message = data.error;
+    } catch (e) {}
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+  await readChatStream(response, g, turn);
 }
 
 async function send(text) {
@@ -1027,40 +1492,29 @@ async function send(text) {
     if (!gotFirst && g === gen) playAck();
   }, 250);
   ctrl = new AbortController();
+  conversation.push({ role: "user", content: text });
+  const turn = startPendingTurn("send", text);
+  turn.userIndex = conversation.length - 1;
+  $("#history").appendChild(journalMessage("user", text));
+  scrollJournal();
 
   try {
-    const r = await fetch(`${apiBase()}/chat`, {
-      method: "POST",
-      signal: ctrl.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!r.ok) {
-      throw new Error("Backend non disponible");
-    }
-    const rd = r.body.getReader(), dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { value, done } = await rd.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (line) onEvent(JSON.parse(line), g);
-      }
-    }
+    await streamChatRequest({ text }, g, turn);
+    if (turn.failed) discardPendingTurn(turn);
+    else commitPendingTurn(turn);
   } catch (e) {
     if (e.name !== "AbortError" && g === gen) {
-      note("Mode local : backend non disponible.", true);
-      const reply = `Je suis en mode local. Vous avez dit : "${text}".`;
-      say(reply);
-      addToHistory(text, reply);
-      if (g === gen) {
-        streaming = false;
-        clearTimeout(ackTimer);
-        maybeResume();
+      if (!turn.assistant.trim()) {
+        note("Mode local : backend non disponible.", true);
+        const reply = `Je suis en mode local. Vous avez dit : "${text}".`;
+        turn.assistant = reply;
+        setPendingAssistantText(turn, reply);
+        appendReply(reply);
+        say(reply);
+        commitPendingTurn(turn);
+      } else {
+        note("Liaison interrompue, commandant.", true);
+        discardPendingTurn(turn);
       }
     }
   } finally {
@@ -1068,6 +1522,66 @@ async function send(text) {
       streaming = false;
       clearTimeout(ackTimer);
       maybeResume();
+      if (!session && !pending && pendingTurn === null) {
+        state = "off";
+        document.body.dataset.state = "off";
+      }
+    }
+  }
+}
+
+async function regenerateLast() {
+  if (streaming || pendingTurn) { historyStatus("Réponse en cours, commandant.", true); return; }
+  if (!currentSessionId) { historyStatus("Session courante inconnue, commandant.", true); return; }
+  const last = conversation[conversation.length - 1];
+  const previous = conversation[conversation.length - 2];
+  if (!last || last.role !== "assistant" || !previous || previous.role !== "user") {
+    historyStatus("Rien à régénérer.", true);
+    return;
+  }
+  interrupt(false);
+  const g = gen;
+  $("#you").textContent = previous.content;
+  clearReply();
+  setState("thinking");
+  startBargeMonitor();
+  streaming = true;
+  gotFirst = false;
+  ackTimer = setTimeout(() => {
+    if (!gotFirst && g === gen) playAck();
+  }, 250);
+  ctrl = new AbortController();
+  const turn = startPendingTurn("regenerate", previous.content);
+  turn.previousAssistant = last;
+
+  try {
+    await streamChatRequest({ regenerate: true, session: currentSessionId, user: previous.content }, g, turn);
+    if (turn.failed || !turn.assistant.trim()) discardPendingTurn(turn);
+    else {
+      commitPendingTurn(turn);
+      historyStatus("Réponse régénérée");
+      note("Réponse régénérée, commandant.");
+    }
+  } catch (e) {
+    if (e.name !== "AbortError" && g === gen) {
+      if (e.status === 409) {
+        historyStatus(e.message || "rien à régénérer", true);
+        note(e.message || "Rien à régénérer, commandant.", true);
+      } else {
+        historyStatus("Régénération impossible : " + (e.message || "backend absent"), true);
+        note("Mode local : backend non disponible.", true);
+      }
+      discardPendingTurn(turn);
+    }
+  } finally {
+    if (g === gen) {
+      streaming = false;
+      clearTimeout(ackTimer);
+      maybeResume();
+      if (!session && !pending && pendingTurn === null) {
+        state = "off";
+        document.body.dataset.state = "off";
+      }
     }
   }
 }
@@ -1186,10 +1700,424 @@ async function saveConfig(extra) {
   }
 }
 
-/* ---------- Panneau réglages ---------- */
+/* ---------- Diagnostic ---------- */
+function diagLine(label, value, isError) {
+  const line = document.createElement("div");
+  line.className = "diag-line";
+  const key = document.createElement("span");
+  key.className = "diag-key";
+  key.textContent = label;
+  const val = document.createElement("span");
+  val.className = "diag-val" + (isError ? " bad" : "");
+  val.textContent = value;
+  line.appendChild(key);
+  line.appendChild(val);
+  return line;
+}
+
+function renderDiagnostic(data) {
+  const box = $("#diag-lines");
+  box.textContent = "";
+  const llm = data.llm || {};
+  const providers = Array.isArray(llm.providers) ? llm.providers : [];
+  const configured = providers.filter(provider => provider && provider.configured);
+  const providerText = configured.length
+    ? configured.map(provider => provider.name + (provider.model ? " · " + provider.model : "")).join(", ")
+    : "aucun fournisseur configuré";
+  const active = llm.active || (llm.mock ? "mock" : "aucun");
+  const stt = data.stt || {};
+  const piper = (data.tts && data.tts.piper) || {};
+  const memory = data.memory || {};
+  const history = data.history || {};
+  const lastError = data.last_error;
+
+  box.appendChild(diagLine("Serveur", data.server && data.server.ok !== false ? "opérationnel" : "hors service", !(data.server && data.server.ok !== false)));
+  box.appendChild(diagLine("Auth", data.auth && data.auth.ok ? "session valide" : "non authentifié", !(data.auth && data.auth.ok)));
+  box.appendChild(diagLine("Cerveau", active + (llm.mock ? " (mock)" : "") + (llm.ok ? "" : " — indisponible"), !llm.ok));
+  box.appendChild(diagLine("Fournisseurs", providerText));
+  box.appendChild(diagLine("STT", (stt.model || "—") + (stt.ok ? "" : " — clé absente"), !stt.ok));
+  box.appendChild(diagLine("Piper", piper.available ? ("disponible" + (piper.model ? " · " + piper.model : "")) : "indisponible — repli système", !piper.available));
+  box.appendChild(diagLine("Mémoire", (Number(memory.count) || 0) + " fait(s)"));
+  box.appendChild(diagLine("Historique", (Number(history.sessions) || 0) + " session(s) · courante " + (history.current || "—")));
+  box.appendChild(diagLine(
+    "Dernière erreur",
+    lastError && lastError.message
+      ? lastError.message + (lastError.source ? " (" + lastError.source + ")" : "") + (lastError.at ? " · " + formatDate(lastError.at) : "")
+      : "aucune",
+    !!(lastError && lastError.message)
+  ));
+}
+
+async function refreshPiperStatus() {
+  try {
+    const response = await fetch(`${apiBase()}/diagnostic`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    setPiperAvailability(!!(data.tts && data.tts.piper && data.tts.piper.available));
+  } catch (e) {
+    setPiperAvailability(null);
+  }
+}
+
+async function runDiagnostic() {
+  const status = $("#diag-status");
+  if (status) { status.textContent = "Vérification…"; status.classList.remove("ok"); status.classList.remove("err"); }
+  try {
+    const response = await fetch(`${apiBase()}/diagnostic`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    renderDiagnostic(data);
+    setPiperAvailability(!!(data.tts && data.tts.piper && data.tts.piper.available));
+    if (status) { status.textContent = "OK"; status.classList.add("ok"); }
+  } catch (e) {
+    const box = $("#diag-lines");
+    box.textContent = "";
+    box.appendChild(diagLine("État", "Diagnostic indisponible (" + (e.message || "backend absent") + ")", true));
+    if (status) { status.textContent = "Échec"; status.classList.add("err"); }
+  }
+}
+
+/* ---------- Mémoire ---------- */
+function memoryStatus(message, isError) {
+  const el = $("#memory-status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("err", !!isError);
+  el.classList.toggle("ok", !isError && /enregistr|fait/i.test(message || ""));
+}
+
+function memoryItem(fact) {
+  const item = document.createElement("article");
+  item.className = "mem-item";
+  if (memoryEditingId === fact.id) {
+    const textarea = document.createElement("textarea");
+    textarea.value = fact.text;
+    textarea.maxLength = 500;
+    textarea.rows = 3;
+    textarea.setAttribute("aria-label", "Modifier le fait");
+    const actions = document.createElement("div");
+    actions.className = "mem-actions";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "ghost";
+    save.textContent = "Valider";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Annuler";
+    save.addEventListener("click", async () => {
+      const text = textarea.value.trim();
+      if (!text) return;
+      memoryEditingId = null;
+      await memoryAction({ action: "update", id: fact.id, text });
+    });
+    cancel.addEventListener("click", () => {
+      memoryEditingId = null;
+      renderMemory();
+    });
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    item.appendChild(textarea);
+    item.appendChild(actions);
+    return item;
+  }
+  const text = document.createElement("p");
+  text.className = "mem-text";
+  text.textContent = fact.text;
+  const meta = document.createElement("div");
+  meta.className = "mem-meta";
+  const source = document.createElement("span");
+  source.textContent = fact.source || "—";
+  const date = document.createElement("span");
+  date.textContent = formatDate(fact.created);
+  meta.appendChild(source);
+  meta.appendChild(date);
+  const actions = document.createElement("div");
+  actions.className = "mem-actions";
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "ghost";
+  edit.textContent = "Modifier";
+  edit.addEventListener("click", () => {
+    memoryEditingId = fact.id;
+    renderMemory();
+  });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost";
+  remove.textContent = "Supprimer";
+  remove.addEventListener("click", async () => {
+    if (!window.confirm("Supprimer ce fait de la mémoire de TARS ?")) return;
+    await memoryAction({ action: "delete", id: fact.id });
+  });
+  actions.appendChild(edit);
+  actions.appendChild(remove);
+  item.appendChild(text);
+  item.appendChild(meta);
+  item.appendChild(actions);
+  return item;
+}
+
+function renderMemory() {
+  const list = $("#memory-list");
+  list.textContent = "";
+  const count = $("#memory-count");
+  if (count) count.textContent = String(memoryFacts.length);
+  if (!memoryFacts.length) {
+    const empty = document.createElement("p");
+    empty.className = "mem-empty";
+    empty.textContent = "Aucun fait enregistré.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const fact of memoryFacts) list.appendChild(memoryItem(fact));
+}
+
+async function loadMemory() {
+  if (memoryLoading) { memoryReloadPending = true; return; }
+  memoryLoading = true;
+  memoryStatus("Chargement…");
+  try {
+    const response = await fetch(`${apiBase()}/memory`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    memoryFacts = Array.isArray(data.facts) ? data.facts : [];
+    renderMemory();
+    memoryStatus(memoryFacts.length + " fait" + (memoryFacts.length > 1 ? "s" : ""));
+  } catch (e) {
+    memoryStatus("Mémoire indisponible : " + (e.message || "backend absent"), true);
+  } finally {
+    memoryLoading = false;
+    if (memoryReloadPending) {
+      memoryReloadPending = false;
+      loadMemory();
+    }
+  }
+}
+
+async function memoryAction(payload) {
+  memoryStatus("Enregistrement…");
+  try {
+    const response = await fetch(`${apiBase()}/memory`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    memoryEditingId = null;
+    await loadMemory();
+    memoryStatus("Enregistré");
+  } catch (e) {
+    memoryStatus("Erreur : " + (e.message || "mémoire non enregistrée"), true);
+  }
+}
+
+async function exportMemory() {
+  try {
+    const response = await fetch(`${apiBase()}/memory/export`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    downloadBlob(await response.blob(), "tars-memoire.md");
+    memoryStatus("Export prêt");
+  } catch (e) {
+    memoryStatus("Export impossible : " + (e.message || "backend absent"), true);
+  }
+}
+
+/* ---------- Historique de sessions ---------- */
+function historyStatus(message, isError) {
+  const el = $("#history-status");
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("err", !!isError);
+  el.classList.toggle("ok", !isError && /ouverte|session|régénérée/i.test(message || ""));
+}
+
+function renderHistory() {
+  const list = $("#history-list");
+  list.textContent = "";
+  const count = $("#history-count");
+  if (count) count.textContent = String(historySessions.length);
+  const query = ($("#history-search").value || "").trim().toLowerCase();
+  const filtered = historySessions.filter(session => {
+    if (!query) return true;
+    return [session.title, session.preview, session.id].some(value =>
+      String(value || "").toLowerCase().includes(query));
+  });
+  if (!filtered.length) {
+    const empty = document.createElement("p");
+    empty.className = "hist-empty";
+    empty.textContent = query ? "Aucune session trouvée." : "Aucune session enregistrée.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const session of filtered) {
+    const item = document.createElement("div");
+    item.className = "hist-item" + (session.id === currentSessionId ? " current" : "");
+    const head = document.createElement("div");
+    head.className = "hist-head";
+    const title = document.createElement("span");
+    title.className = "hist-title";
+    title.textContent = session.title || "Sans titre";
+    const badge = document.createElement("span");
+    badge.className = "hist-badge";
+    badge.textContent = session.id === currentSessionId ? "courante" : "";
+    head.appendChild(title);
+    head.appendChild(badge);
+    const meta = document.createElement("p");
+    meta.className = "hist-meta";
+    meta.textContent = formatDate(session.updated) + " · " + (Number(session.turns) || 0) + " tour(s)";
+    const preview = document.createElement("p");
+    preview.className = "hist-preview";
+    preview.textContent = session.preview || "";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "ghost hist-open";
+    open.textContent = "Ouvrir";
+    open.addEventListener("click", () => openHistory(session.id));
+    item.appendChild(head);
+    item.appendChild(meta);
+    item.appendChild(preview);
+    item.appendChild(open);
+    list.appendChild(item);
+  }
+}
+
+async function loadHistory(options = {}) {
+  try {
+    const response = await fetch(`${apiBase()}/history`, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const data = await response.json();
+    historySessions = Array.isArray(data.sessions) ? data.sessions : [];
+    if (data.current) currentSessionId = data.current;
+    renderHistory();
+    if (!options.silent) historyStatus(historySessions.length + " session(s)");
+    return data;
+  } catch (e) {
+    if (!options.silent) historyStatus("Historique indisponible : " + (e.message || "backend absent"), true);
+    return null;
+  }
+}
+
+async function restoreCurrentSession() {
+  const startGen = gen;
+  const data = await loadHistory({ silent: true });
+  if (!data || !data.current) return;
+  if (startGen !== gen || streaming || pendingTurn || conversation.length > 0) return;
+  try {
+    const response = await fetch(`${apiBase()}/history/${encodeURIComponent(data.current)}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const session = await response.json();
+    if (startGen !== gen || streaming || pendingTurn || conversation.length > 0) return;
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    conversation = messages
+      .map(message => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: String(message.content || ""),
+      }))
+      .filter(message => message.content);
+    currentSessionId = session.id || data.current;
+    pendingTurn = null;
+    renderJournal();
+  } catch (e) {}
+}
+
+async function openHistory(id) {
+  if (!id) return;
+  interrupt(false);
+  stopRec();
+  stopRecording(true);
+  historyStatus("Ouverture…");
+  try {
+    const response = await fetch(`${apiBase()}/history/open`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    conversation = messages
+      .map(message => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: String(message.content || ""),
+      }))
+      .filter(message => message.content);
+    currentSessionId = data.id || id;
+    pendingTurn = null;
+    renderJournal();
+    historyStatus("Session ouverte");
+    await loadHistory({ silent: true });
+    if (session) {
+      setState("listening");
+      if (USE_SR) { if (!rec) listen(); }
+      else if (!recorder && !recPending) startRecording();
+    }
+  } catch (e) {
+    historyStatus("Ouverture impossible : " + (e.message || "erreur"), true);
+  }
+}
+
+async function newSession() {
+  interrupt(false);
+  stopRec();
+  stopRecording(true);
+  historyStatus("Création…");
+  try {
+    const response = await fetch(`${apiBase()}/history/new`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    currentSessionId = data.id || "";
+    conversation = [];
+    pendingTurn = null;
+    $("#history").textContent = "";
+    $("#you").textContent = "";
+    clearReply();
+    historyStatus("Nouvelle session");
+    await loadHistory({ silent: true });
+    if (session) {
+      setState("listening");
+      if (USE_SR) { if (!rec) listen(); }
+      else if (!recorder && !recPending) startRecording();
+    }
+  } catch (e) {
+    historyStatus("Nouvelle session impossible : " + (e.message || "erreur"), true);
+  }
+}
+
+function exportConversation() {
+  if (!conversation.length) {
+    historyStatus("Rien à exporter.", true);
+    return;
+  }
+  const lines = ["# TARS — conversation", "", "Session : " + (currentSessionId || "courante"), ""];
+  for (const message of conversation) {
+    lines.push(message.role === "assistant" ? "## TARS" : "## Vous");
+    lines.push("");
+    lines.push(message.content);
+    lines.push("");
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+  downloadBlob(blob, "tars-session-" + (currentSessionId || "courante") + ".md");
+  historyStatus("Export prêt");
+}
+
+
 $("#gear").addEventListener("click", () => {
   const open = $("#settings").classList.toggle("open");
-  if (open) loadConfig();
+  if (open) {
+    loadConfig();
+    refreshPiperStatus();
+    loadMemory();
+    loadHistory();
+  }
 });
 
 $("#save-config").addEventListener("click", () => saveConfig());
@@ -1197,6 +2125,44 @@ $("#save-config").addEventListener("click", () => saveConfig());
 $("#clear-key").addEventListener("click", () => {
   $("#groq-key").value = "";
   saveConfig({ groq_api_key: "" });
+});
+
+/* ---------- Événements diagnostic / mémoire / historique / Piper ---------- */
+$("#diag-run").addEventListener("click", runDiagnostic);
+$("#memory-block").addEventListener("toggle", event => { if (event.target.open) loadMemory(); });
+$("#history-block").addEventListener("toggle", event => { if (event.target.open) loadHistory(); });
+$("#memory-refresh").addEventListener("click", loadMemory);
+$("#memory-export").addEventListener("click", exportMemory);
+$("#memory-clear").addEventListener("click", async () => {
+  if (!memoryFacts.length) return;
+  if (!window.confirm("Effacer toute la mémoire de TARS ?")) return;
+  await memoryAction({ action: "clear" });
+});
+$("#memory-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const input = $("#memory-input");
+  const text = input.value.trim();
+  if (!text) return;
+  await memoryAction({ action: "add", text });
+  if (input.value.trim() === text) input.value = "";
+});
+$("#history-search").addEventListener("input", renderHistory);
+$("#history-new").addEventListener("click", newSession);
+$("#history-refresh").addEventListener("click", () => loadHistory());
+$("#history-export").addEventListener("click", exportConversation);
+$("#history-regen").addEventListener("click", regenerateLast);
+$("#piper-enabled").addEventListener("change", event => {
+  piperEnabled = event.target.checked;
+  piperPref = piperEnabled;
+  try { localStorage.setItem("tars.piper", piperEnabled ? "1" : "0"); } catch (e) {}
+  if (piperEnabled) piperBroken = false;
+  else {
+    stopPiper();
+    pending = 0;
+    maybeResume();
+  }
+  setPiperAvailability(piperAvailable);
+  if (piperEnabled) refreshPiperStatus();
 });
 
 /* ---------- Événements ---------- */
@@ -1245,8 +2211,13 @@ $("#settings-close").addEventListener("click", () => $("#settings").classList.re
 document.addEventListener("keydown", e => { if (e.key === "Escape") $("#settings").classList.remove("open"); });
 
 syncVoiceUI();
+$("#piper-enabled").checked = piperEnabled;
+setPiperAvailability(null);
 renderGauges();
 loadConfig();
+refreshPiperStatus();
+if (isWidget) loadHistory({ silent: true });
+else restoreCurrentSession();
 </script>
 </body>
 </html>
